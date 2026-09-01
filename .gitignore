@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# Зависимости и результаты сборки
+# ---------------------------------------------------------------------------
+node_modules/
+
+# Сборка фронтенда и промежуточные архивы, которые build.ps1 создаёт заново
+dist/
+dist.zip
+bin.zip
+lists.zip
+
+# Rust-артефакты (каталог src-tauri остался от раннего варианта хоста)
+src-tauri/target/
+
+# ---------------------------------------------------------------------------
+# Данные, создаваемые приложением во время работы
+# ---------------------------------------------------------------------------
+# Пользовательские списки: их пишет вкладка «Хостлисты», в поставку они
+# не входят (build.ps1 исключает *-user.txt из lists.zip), а NativeApp.cs
+# создаёт их при первом запуске.
+host-list/*-user.txt
+logs/
+*.log
+
+# ---------------------------------------------------------------------------
+# Вендорные файлы, которые не нужны для сборки
+# ---------------------------------------------------------------------------
+# Из nuget-пакета WebView2 (44 МБ) build.ps1 использует ровно три библиотеки:
+#   lib/net462/Microsoft.Web.WebView2.Core.dll
+#   lib/net462/Microsoft.Web.WebView2.WinForms.dll
+#   runtimes/win-x64/native/WebView2Loader.dll
+# Остальное — заголовки C++, WinRT-проекции, документация и сборки под другие
+# платформы; они не участвуют ни в компиляции, ни в работе приложения.
+packages/webview2/*
+!packages/webview2/LICENSE.txt
+!packages/webview2/NOTICE.txt
+!packages/webview2/lib/
+packages/webview2/lib/*
+!packages/webview2/lib/net462/
+packages/webview2/lib/net462/*
+!packages/webview2/lib/net462/Microsoft.Web.WebView2.Core.dll
+!packages/webview2/lib/net462/Microsoft.Web.WebView2.WinForms.dll
+!packages/webview2/runtimes/
+packages/webview2/runtimes/*
+!packages/webview2/runtimes/win-x64/
+packages/webview2/runtimes/win-x64/*
+!packages/webview2/runtimes/win-x64/native/
+packages/webview2/runtimes/win-x64/native/*
+!packages/webview2/runtimes/win-x64/native/WebView2Loader.dll
+
+# Готовые бинарники zapret под все платформы (14 МБ). Нужные Windows-файлы
+# уже лежат в bin/ и попадают в exe как ресурс; здесь каталог хранится ради
+# исходников ядра и документации, по которым сверяются опции winws.
+zapret-raw/zapret-v72.13/binaries/
+zapret-raw/zapret-v72.13/tmp/
+
+# ---------------------------------------------------------------------------
+# Мусор ОС и редакторов
+# ---------------------------------------------------------------------------
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

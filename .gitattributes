@@ -1,0 +1,17 @@
+# Файлы этого проекта хранятся и выгружаются байт в байт, без нормализации
+# переводов строк. Это важно, потому что:
+#   * scripts/build.ps1 обязан остаться UTF-8 с BOM (PowerShell 5.1 иначе
+#     ломает кириллицу), а host-list/*.txt читает cygwin-сборка winws.exe;
+#   * bin/*.bin — точные байты фейковых пейлоадов TLS/QUIC, их длина
+#     подставляется в --dpi-desync-split-seqovl и не должна меняться;
+#   * release-v0.0.*/ содержат готовые exe.
+* -text
+
+# Явно бинарные: не показывать в diff и не пытаться сливать.
+*.exe    binary
+*.dll    binary
+*.sys    binary
+*.bin    binary
+*.ico    binary
+*.zip    binary
+*.tlb    binary

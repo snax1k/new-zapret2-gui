@@ -1,0 +1,98 @@
+# Основной список доменов, к которым применяется обход.
+# Домены YouTube/Google вынесены в list-google.txt (для них своя стратегия).
+# Свои домены добавляйте на вкладке «Хостлисты» — они попадут в list-user.txt.
+
+# --- DNS-over-HTTPS ---
+^dns.google
+^dns.quad9.net
+^dns.nextdns.io
+^doh.opendns.com
+^doh.cleanbrowsing.org
+^freedns.controld.com
+^wikimedia-dns.org
+^cloudflare-dns.com
+
+# --- Cloudflare / ECH ---
+cloudflare-ech.com
+encryptedsni.com
+cloudflareaccess.com
+cloudflareapps.com
+cloudflarebolt.com
+cloudflareclient.com
+cloudflareinsights.com
+cloudflareok.com
+cloudflarepartners.com
+cloudflareportal.com
+cloudflarepreview.com
+cloudflareresolve.com
+cloudflaressl.com
+cloudflarestatus.com
+cloudflarestorage.com
+cloudflarestream.com
+cloudflaretest.com
+cloudfront.net
+
+# --- Discord ---
+dis.gd
+discord-attachments-uploads-prd.storage.googleapis.com
+discord.app
+discord.co
+discord.com
+discord.design
+discord.dev
+discord.gg
+discord.gift
+discord.gifts
+discord.media
+discord.new
+discord.store
+discord.status
+discord-activities.com
+discordactivities.com
+discordapp.com
+discordapp.net
+discordcdn.com
+discordmerch.com
+discordpartygames.com
+discordsays.com
+discordsez.com
+discordstatus.com
+
+# --- Telegram (веб-версия и статика; серверы DC ловятся по ipset-telegram.txt) ---
+telegram.org
+telegram.me
+telegram.dog
+telesco.pe
+t.me
+tdesktop.com
+telegra.ph
+comments.app
+fragment.com
+tx.me
+
+# --- Стриминг / медиа ---
+zendesk.com
+frankerfacez.com
+ffzap.com
+betterttv.net
+7tv.app
+7tv.io
+localizeapi.com
+klipy.com
+live-video.net
+rumble.com
+soundcloud.com
+
+# --- Прочее ---
+rutracker.org
+rutracker.cc
+nnmclub.to
+ntc.party
+instagram.com
+cdninstagram.com
+facebook.com
+fbcdn.net
+twitter.com
+x.com
+t.co
+twimg.com

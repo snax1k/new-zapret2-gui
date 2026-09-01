@@ -1,0 +1,116 @@
+# Zapret2 Control Center
+
+Графическая оболочка для [bol-van/zapret](https://github.com/bol-van/zapret) под Windows —
+обход DPI для YouTube, Discord и Telegram. Собирается в один переносимый `.exe`,
+который распаковывает ядро и списки при первом запуске.
+
+| | |
+|---|---|
+| Текущая версия | **v0.0.8** |
+| Ядро в поставке | zapret **v72.13** (`winws.exe` + WinDivert 2.2 x64) |
+| Требования | Windows 10/11 x64, .NET Framework 4.x, права администратора |
+
+---
+
+## Как устроено
+
+Приложение — это WinForms-хост с встроенным WebView2, внутри которого крутится
+React-интерфейс. Всё лежит в одном exe: `dist.zip`, `bin.zip` и `lists.zip`
+вшиты в него ресурсами и разворачиваются в `%LOCALAPPDATA%\Zapret2-GUI\`.
+
+```
+%LOCALAPPDATA%\Zapret2-GUI\
+├─ bin\          ← ядро; перезаписывается целиком при каждом запуске
+│   ├─ winws.exe, cygwin1.dll, WinDivert.dll, WinDivert64.sys
+│   └─ *.bin     ← фейковые пейлоады TLS/QUIC/STUN
+├─ host-list\    ← списки доменов и подсетей
+│   ├─ list-general.txt, list-google.txt, list-exclude.txt
+│   ├─ ipset-telegram.txt
+│   └─ list-user.txt, list-exclude-user.txt   ← пишет вкладка «Хостлисты»
+├─ dist\         ← интерфейс
+├─ logs\         ← zapret2.log + до 5 zip-архивов ротации (порог 10 МБ)
+└─ WebViewData\  ← localStorage: пресеты, переключатели, тема
+```
+
+Каталоги разделены намеренно: `bin\` считается заменяемым и затирается
+обновлением, а `host-list\` содержит в том числе пользовательские файлы,
+которые терять нельзя.
+
+### Стратегия обхода
+
+Единственный пресет собирает командную строку `winws.exe` из шести профилей,
+разделённых `--new`. Порядок важен: ядро выбирает **первый** подходящий профиль
+(`dp_find` в `nfq/desync.c`), а профиль со списком доменов не может выиграть,
+пока имя хоста неизвестно.
+
+| # | Профиль | Отбор |
+|---|---------|-------|
+| 1 | QUIC / HTTP-3 | UDP 443, домены из списков |
+| 2 | Голос Discord | UDP 19294-19344, 50000-65535, `--filter-l7=discord,stun` |
+| 3 | Медиасерверы Discord | TCP 2053,2083,2087,2096,8443, `discord.media` |
+| 4 | YouTube и Google | TCP 443, `list-google.txt` |
+| 5 | Остальные сайты | TCP 80,443, `list-general.txt` |
+| 6 | Telegram | TCP 80,443 по `ipset-telegram.txt` |
+
+Профиль Telegram обязан идти **последним**: у MTProto нет имени хоста, поэтому
+он отбирается только по подсетям и с `--dpi-desync-any-protocol`.
+
+Профиль 4 переключается из интерфейса — блок «Стратегия YouTube и Google»
+предлагает семь вариантов десинхронизации, включая «Выключено» как эталон для
+сравнения. Какая техника пробивает DPI, зависит от провайдера, поэтому вариант
+подбирается перебором.
+
+Вся сборка команды живёт в одном месте — [`src/lib/zapretCommand.ts`](src/lib/zapretCommand.ts).
+Там же зафиксированы правила ядра, нарушение которых роняет `winws` с кодом 1:
+без `--wf-tcp`/`--wf-udp` он не стартует вообще, а `--dpi-desync-autottl`
+принимает только формат `[+|-]<delta>[:<min>[-<max>]]`.
+
+---
+
+## Сборка
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1
+```
+
+Скрипт ставит зависимости, собирает фронтенд через Vite, пакует ресурсы и
+компилирует exe через `csc.exe` из .NET Framework 4. Результат —
+`release-v<версия>\Zapret2-GUI-v<версия>-portable.exe`.
+
+`scripts\build.ps1` сохранён в UTF-8 **с BOM**: без него PowerShell 5.1 ломает
+кириллицу в выводе.
+
+### Проверка командной строки
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify_args.ps1
+```
+
+Прогоняет все семь стратегий YouTube через `winws --wf-save` — ядро разбирает
+аргументы, собирает фильтр WinDivert и выходит, не загружая драйвер. Так
+проверяются пути к спискам, наличие `.bin`-пейлоадов и синтаксис всех опций.
+Нужны права администратора.
+
+---
+
+## Структура репозитория
+
+| Каталог | Что внутри |
+|---------|-----------|
+| `src/` | React + TypeScript интерфейс |
+| `src-native/` | `NativeApp.cs` — WinForms-хост, WebView2, запуск ядра, логи, IPC |
+| `scripts/` | сборка и проверка |
+| `bin/` | ядро zapret и фейковые пейлоады (вшиваются в exe) |
+| `host-list/` | списки доменов и подсетей (вшиваются в exe) |
+| `packages/webview2/` | три библиотеки WebView2, нужные компилятору |
+| `zapret-raw/` | исходники ядра v72.13 — справочник по опциям winws |
+| `release-v0.0.*/` | собранные версии с README по каждой |
+| `src-tauri/` | остаток раннего варианта хоста, в сборке не участвует |
+
+---
+
+## Лицензии
+
+Ядро — [bol-van/zapret](https://github.com/bol-van/zapret).
+WinDivert — [basil00/WinDivert](https://github.com/basil00/WinDivert), GPLv3/LGPLv3.
+WebView2 — Microsoft, условия в `packages/webview2/LICENSE.txt`.
