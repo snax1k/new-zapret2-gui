@@ -96,7 +96,7 @@ export const TitleBar: React.FC = () => {
         </span>
 
         <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400 border border-black/10 dark:border-white/10 font-medium">
-          v0.0.8-portable
+          v0.0.9-portable
         </span>
       </div>
 

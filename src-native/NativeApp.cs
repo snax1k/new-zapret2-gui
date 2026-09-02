@@ -16,6 +16,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Win32;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -39,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.0.8";
+        public const string AppVersion = "0.0.9";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -843,6 +844,50 @@ namespace Zapret2App
         }
 
         /// <summary>Путь к winws.exe: сначала распакованная копия, затем каталог рядом с приложением.</summary>
+        /// <summary>
+        /// Предупреждает, если в Windows включён системный прокси.
+        ///
+        /// Это не мелочь, а принципиальное ограничение. При включённом прокси
+        /// приложения (браузеры, Discord, Telegram Desktop) отправляют HTTP(S)
+        /// не на адрес сайта, а на прокси — обычно на 127.0.0.1. Фильтр
+        /// WinDivert начинается с "!impostor and !loopback", поэтому такой
+        /// трафик winws НЕ ВИДИТ и повлиять на него не может: в логе будут
+        /// нули, а переключение стратегий ничего не изменит.
+        ///
+        /// Через прокси при этом не идёт UDP: голос Discord и QUIC остаются
+        /// задачей обхода.
+        /// </summary>
+        private void WarnIfSystemProxy()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Internet Settings"))
+                {
+                    if (key == null) return;
+
+                    object enabled = key.GetValue("ProxyEnable");
+                    object server = key.GetValue("ProxyServer");
+                    if (enabled == null || Convert.ToInt32(enabled) == 0) return;
+
+                    string addr = (server as string) ?? string.Empty;
+                    if (addr.Length == 0) return;
+
+                    SendLog("warn", "В Windows включён системный прокси: " + addr, "Proxy");
+                    SendLog("warn",
+                        "HTTP(S)-трафик приложений уходит на прокси, а не напрямую. " +
+                        "Такой трафик идёт через loopback, который фильтр WinDivert " +
+                        "исключает, поэтому обход его НЕ ВИДИТ и не обрабатывает.",
+                        "Proxy");
+                    SendLog("info",
+                        "Через прокси не идёт UDP: голос Discord и QUIC по-прежнему " +
+                        "обрабатываются обходом.",
+                        "Proxy");
+                }
+            }
+            catch { }
+        }
+
         private string ResolveWinwsDir()
         {
             if (!string.IsNullOrEmpty(binPath) && File.Exists(Path.Combine(binPath, "winws.exe")))
@@ -970,6 +1015,7 @@ namespace Zapret2App
             lock (lastErrors) { lastErrors.Clear(); }
             stopRequested = false;
 
+            WarnIfSystemProxy();
             SendLog("info", "Рабочий каталог ядра: " + dir, "Runner");
             SendLog("info", "winws.exe " + cleanArgs, "Runner");
 

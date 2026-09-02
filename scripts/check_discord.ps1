@@ -1,7 +1,10 @@
 ﻿# Проверка доступности эндпоинтов Discord НЕЗАВИСИМО от клиента Discord.
 #
-# Отвечает на вопрос «обход мешает или Discord сам сломался»: гоняется один
-# раз с выключенным обходом и один раз с включённым, результаты сравниваются.
+# Каждый адрес проверяется ДВУМЯ путями: напрямую и через системный прокси,
+# если он настроен. Это принципиально: при включённом системном прокси весь
+# HTTP(S)-трафик уходит на 127.0.0.1, то есть в loopback, а фильтр WinDivert
+# начинается с "!loopback" — zapret такой трафик не видит и повлиять на него
+# не может. Скрипт, проверяющий только один путь, в этой ситуации врёт.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\check_discord.ps1
 #
@@ -10,62 +13,116 @@
 $ErrorActionPreference = "Continue"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Хосты, к которым клиент Discord обращается при запуске. Порядок важен:
-# именно в такой последовательности он их и дёргает.
+# Хосты, к которым клиент Discord обращается при запуске.
 $targets = @(
-    @{ Name = "updates.discord.com";       Url = "https://updates.discord.com/distributions/app/manifests/latest?channel=stable&platform=win&arch=x64"; Profile = "5 (list-general.txt)" },
-    @{ Name = "discord.com API";           Url = "https://discord.com/api/v9/gateway";        Profile = "5 (list-general.txt)" },
-    @{ Name = "gateway.discord.gg";        Url = "https://gateway.discord.gg/";               Profile = "5 (list-general.txt)" },
-    @{ Name = "stable.dl2.discordapp.net"; Url = "https://stable.dl2.discordapp.net/";        Profile = "4 (list-google.txt!)" },
-    @{ Name = "cdn.discordapp.com";        Url = "https://cdn.discordapp.com/";               Profile = "5 (list-general.txt)" }
+    @{ Name = "updates.discord.com";       Url = "https://updates.discord.com/distributions/app/manifests/latest?channel=stable&platform=win&arch=x64" },
+    @{ Name = "discord.com API";           Url = "https://discord.com/api/v9/gateway" },
+    @{ Name = "gateway.discord.gg";        Url = "https://gateway.discord.gg/" },
+    @{ Name = "stable.dl2.discordapp.net"; Url = "https://stable.dl2.discordapp.net/" },
+    @{ Name = "cdn.discordapp.com";        Url = "https://cdn.discordapp.com/" }
 )
 
+# --- Состояние обхода ------------------------------------------------------
 $winws = @(Get-Process -Name winws -ErrorAction SilentlyContinue)
 if ($winws.Count -gt 0) {
-    Write-Host ("ОБХОД ВКЛЮЧЁН (winws.exe PID " + ($winws[0].Id) + ")") -ForegroundColor Yellow
+    Write-Host ("ОБХОД ВКЛЮЧЁН (winws.exe PID " + $winws[0].Id + ")") -ForegroundColor Yellow
 } else {
     Write-Host "ОБХОД ВЫКЛЮЧЕН (winws.exe не запущен)" -ForegroundColor Cyan
 }
-Write-Host ""
 
-$bad = 0
-foreach ($t in $targets) {
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    $status = $null
-    $err = $null
-    try {
-        $r = Invoke-WebRequest -Uri $t.Url -Method Head -TimeoutSec 15 -UseBasicParsing
-        $status = [int]$r.StatusCode
-    } catch [Net.WebException] {
-        if ($_.Exception.Response) {
-            # 401/403/404 означают, что соединение и TLS прошли — это успех.
-            $status = [int]$_.Exception.Response.StatusCode
-        } else {
-            $err = $_.Exception.Message
+# --- Системный прокси ------------------------------------------------------
+$proxyUrl = $null
+$ini = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
+if ($ini -and $ini.ProxyEnable -eq 1 -and $ini.ProxyServer) {
+    $ps = [string]$ini.ProxyServer
+    if ($ps -notmatch '=') { $proxyUrl = "http://" + $ps }
+    else {
+        foreach ($part in $ps.Split(';')) {
+            if ($part -match '^https?=(.+)$') { $proxyUrl = "http://" + $matches[1]; break }
         }
-    } catch {
-        $err = $_.Exception.Message
-    }
-    $sw.Stop()
-    $ms = [int]$sw.ElapsedMilliseconds
-
-    if ($status) {
-        Write-Host ("  OK    {0,-28} HTTP {1}  {2} мс" -f $t.Name, $status, $ms) -ForegroundColor Green
-    } else {
-        $bad++
-        Write-Host ("  СБОЙ  {0,-28} {1}" -f $t.Name, $err) -ForegroundColor Red
-        Write-Host ("        обрабатывается профилем " + $t.Profile) -ForegroundColor DarkGray
     }
 }
 
-Write-Host ""
-if ($bad -eq 0) {
-    Write-Host "Все эндпоинты Discord доступны." -ForegroundColor Green
-    if ($winws.Count -gt 0) {
-        Write-Host "Обход при этом включён — значит он сети Discord не мешает," -ForegroundColor Green
-        Write-Host "и причину зависшего апдейтера надо искать на стороне клиента." -ForegroundColor Green
+if ($proxyUrl) {
+    Write-Host ("СИСТЕМНЫЙ ПРОКСИ ВКЛЮЧЁН: " + $proxyUrl) -ForegroundColor Magenta
+    if ($proxyUrl -match ':(\d+)') {
+        $port = [int]$matches[1]
+        $lis = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
+        if ($lis.Count -gt 0) {
+            $owner = Get-Process -Id $lis[0].OwningProcess -ErrorAction SilentlyContinue
+            Write-Host ("  порт слушает: " + $(if ($owner) { $owner.ProcessName + " (PID " + $owner.Id + ")" } else { "неизвестный процесс" })) -ForegroundColor DarkGray
+        } else {
+            Write-Host "  порт НИКТО НЕ СЛУШАЕТ — прокси-клиент не запущен" -ForegroundColor Red
+        }
     }
+    Write-Host "  Внимание: трафик через прокси идёт в loopback, zapret его НЕ ВИДИТ." -ForegroundColor DarkGray
 } else {
-    Write-Host ("Недоступны: " + $bad) -ForegroundColor Red
-    Write-Host "Прогоните этот же скрипт со ВТОРЫМ состоянием обхода и сравните." -ForegroundColor Yellow
+    Write-Host "Системный прокси выключен." -ForegroundColor Cyan
+}
+Write-Host ""
+
+# --- Проверка --------------------------------------------------------------
+function Test-Endpoint([string]$url, $proxy) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $a = @{ Uri = $url; Method = "Head"; TimeoutSec = 15; UseBasicParsing = $true }
+        if ($proxy) { $a["Proxy"] = $proxy } else { $a["Proxy"] = $null; $a["UseDefaultCredentials"] = $false }
+        $r = Invoke-WebRequest @a
+        $sw.Stop()
+        return @{ Ok = $true; Text = ("HTTP " + [int]$r.StatusCode + "  " + [int]$sw.ElapsedMilliseconds + " мс") }
+    } catch [Net.WebException] {
+        $sw.Stop()
+        # 401/403/404 значат, что TCP и TLS прошли — для нас это успех.
+        if ($_.Exception.Response) {
+            return @{ Ok = $true; Text = ("HTTP " + [int]$_.Exception.Response.StatusCode + "  " + [int]$sw.ElapsedMilliseconds + " мс") }
+        }
+        return @{ Ok = $false; Text = $_.Exception.Message }
+    } catch {
+        $sw.Stop()
+        return @{ Ok = $false; Text = $_.Exception.Message }
+    }
+}
+
+Write-Host ("  {0,-28} {1,-24} {2}" -f "АДРЕС", "НАПРЯМУЮ", "ЧЕРЕЗ ПРОКСИ") -ForegroundColor DarkGray
+
+$directOk = 0
+$proxyOk = 0
+foreach ($t in $targets) {
+    # Явный $null в -Proxy отключает системный прокси для этого запроса.
+    $d = Test-Endpoint $t.Url $null
+    if ($d.Ok) { $directOk++ }
+
+    $p = $null
+    if ($proxyUrl) {
+        $p = Test-Endpoint $t.Url $proxyUrl
+        if ($p.Ok) { $proxyOk++ }
+    }
+
+    $dText = $(if ($d.Ok) { $d.Text } else { "СБОЙ" })
+    $pText = $(if ($proxyUrl) { $(if ($p.Ok) { $p.Text } else { "СБОЙ" }) } else { "—" })
+    $color = $(if ($d.Ok -or ($p -and $p.Ok)) { "Green" } else { "Red" })
+    Write-Host ("  {0,-28} {1,-24} {2}" -f $t.Name, $dText, $pText) -ForegroundColor $color
+}
+
+# --- Вывод -----------------------------------------------------------------
+$n = $targets.Count
+Write-Host ""
+Write-Host ("Напрямую доступно: " + $directOk + " из " + $n)
+if ($proxyUrl) { Write-Host ("Через прокси:      " + $proxyOk + " из " + $n) }
+Write-Host ""
+
+if ($directOk -eq $n) {
+    Write-Host "Discord доступен напрямую — обход для него не нужен." -ForegroundColor Green
+} elseif ($proxyUrl -and $proxyOk -eq $n) {
+    Write-Host "Discord работает ТОЛЬКО через прокси — это НОРМА, а не поломка." -ForegroundColor Yellow
+    Write-Host "Разделение труда: TCP Discord (вход, чат, апдейтер) идёт через" -ForegroundColor Yellow
+    Write-Host "прокси и в loopback, поэтому zapret его не видит и не трогает." -ForegroundColor Yellow
+    Write-Host "Голос Discord — это UDP, он через HTTP-прокси не идёт и остаётся" -ForegroundColor Yellow
+    Write-Host "задачей zapret (профиль 2)." -ForegroundColor Yellow
+    Write-Host "Вывод: если Discord не входит или крутит апдейтер — причина в" -ForegroundColor Yellow
+    Write-Host "прокси, и переключение стратегий обхода тут не поможет." -ForegroundColor Yellow
+} elseif ($directOk -gt 0) {
+    Write-Host "Часть адресов недоступна напрямую — смотрите таблицу выше." -ForegroundColor Yellow
+} else {
+    Write-Host "Discord недоступен ни напрямую, ни через прокси." -ForegroundColor Red
 }

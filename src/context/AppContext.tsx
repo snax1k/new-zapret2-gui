@@ -333,7 +333,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [logs, setLogs] = useState<LogEntry[]>(() => {
     const t = new Date().toTimeString().split(' ')[0];
     return [
-      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.0.8 запущен', source: 'Core' },
+      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.0.9 запущен', source: 'Core' },
       { id: '2', timestamp: t, level: 'info', message: 'Ядро zapret v72.13 (winws.exe, WinDivert 64-bit) готово', source: 'WinWS' }
     ];
   });
