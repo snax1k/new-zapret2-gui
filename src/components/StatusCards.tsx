@@ -1,9 +1,12 @@
 import React from 'react';
-import { ShieldCheck, HardDrive, Network, Gauge } from 'lucide-react';
+import { ShieldCheck, HardDrive, Network, Gauge, Zap } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const StatusCards: React.FC = () => {
-  const { status, stats, theme } = useApp();
+  const { status, stats, quickToggles, theme } = useApp();
+  // Счётчик активности наполняется разбором вывода winws, а он есть
+  // только при --debug. Без него метрика недоступна, а не равна нулю.
+  const canCount = quickToggles.verboseLog;
 
   const isConnected = status === 'connected';
 
@@ -42,11 +45,31 @@ export const StatusCards: React.FC = () => {
       sub: isConnected ? 'Обход активен' : 'Таймер остановлен',
       icon: Gauge,
       color: isConnected ? 'text-emerald-500' : 'text-slate-400'
+    },
+    {
+      // Единственная карточка, отвечающая на вопрос «обход что-то делает?».
+      // Остальные четыре говорят лишь о том, что процесс жив. Ноль при
+      // работающем ядре — это сигнал: трафик до winws не доходит.
+      label: 'Обработано',
+      // Счётчик берётся из вывода ядра, а без --debug ядро молчит. Показывать
+      // в этом случае ноль нельзя: это выглядело бы как «обход не работает».
+      value: !isConnected ? '—' : canCount ? `${stats.desyncCount}` : 'н/д',
+      sub: !isConnected
+        ? 'обход выключен'
+        : !canCount
+          ? 'нужен подробный лог'
+          : stats.desyncCount === 0
+            ? 'трафик не идёт через обход'
+            : `хостов: ${stats.hostCount}`,
+      icon: Zap,
+      color: !isConnected || !canCount
+        ? 'text-slate-400'
+        : stats.desyncCount === 0 ? 'text-amber-500' : 'text-emerald-500'
     }
   ];
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 select-none">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 select-none">
       {cards.map((card, i) => {
         const Icon = card.icon;
 

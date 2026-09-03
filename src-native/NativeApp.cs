@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.0.9";
+        public const string AppVersion = "0.1.0";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -86,6 +86,26 @@ namespace Zapret2App
         private int uiLogSecond = -1;
         private int uiLogCount = 0;
         private int uiLogImportantCount = 0;
+
+        // ---- Счётчик реальной работы обхода ------------------------------
+        // Четыре карточки на главной (драйвер, профили, PID, аптайм) отвечают
+        // на вопрос «процесс жив?», но не на вопрос «он что-то делает?».
+        // Эти счётчики берутся из вывода ядра и отвечают именно на второй:
+        // ноль десинхронизаций при работающем ядре означает, что до winws
+        // просто не доходит трафик (системный прокси, VPN, пустые списки).
+        private long desyncCount = 0;
+        private long hostnameCount = 0;
+        private readonly System.Collections.Generic.HashSet<string> seenHosts =
+            new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly object activityLock = new object();
+        private System.Windows.Forms.Timer activityTimer;
+        private long lastSentDesync = -1;
+        private long lastSentHosts = -1;
+
+        // ---- Автоподбор стратегии ----------------------------------------
+        /// <summary>Идёт автоподбор: статусы ядра в интерфейс не отправляются.</summary>
+        private volatile bool autotuneRunning = false;
+        private volatile bool autotuneCancel = false;
 
         [STAThread]
         public static void Main(string[] args)
@@ -226,6 +246,13 @@ namespace Zapret2App
             ExtractResources();
             SetupTray();
             InitializeWebView();
+
+            // Счётчики уходят в интерфейс раз в секунду и только при изменении,
+            // иначе при --debug это был бы ещё один поток сообщений в WebView.
+            activityTimer = new System.Windows.Forms.Timer();
+            activityTimer.Interval = 1000;
+            activityTimer.Tick += (s, e) => PushActivity();
+            activityTimer.Start();
 
             this.FormClosing += MainForm_FormClosing;
         }
@@ -840,6 +867,10 @@ namespace Zapret2App
 
         private void SendStatus(string status, int pid)
         {
+            // Во время автоподбора ядро перезапускается по разу на вариант.
+            // Если пропускать эти статусы в интерфейс, кнопка питания будет
+            // семь раз мигать «подключение → работает → остановлено».
+            if (autotuneRunning) return;
             SendToWeb(string.Format("{{\"type\":\"status_change\",\"status\":\"{0}\",\"pid\":{1}}}", status, pid));
         }
 
@@ -886,6 +917,188 @@ namespace Zapret2App
                 }
             }
             catch { }
+        }
+
+        // =================================================================
+        //  Предполётная проверка окружения
+        //
+        //  Отвечает на вопрос «почему обход может ничего не сделать».
+        //  Все четыре проверки взяты из реальных случаев, каждый из которых
+        //  стоил круга диагностики по пустому логу.
+        // =================================================================
+
+        private static string JsonEscape(string s)
+        {
+            if (s == null) return string.Empty;
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                    .Replace("\r", " ").Replace("\n", " ");
+        }
+
+        private class PreflightItem
+        {
+            public string Id;
+            /// <summary>ok | warn | error</summary>
+            public string Level;
+            public string Title;
+            public string Detail;
+        }
+
+        /// <summary>Читает системный прокси Windows. null, если он выключен.</summary>
+        private string GetSystemProxy()
+        {
+            try
+            {
+                using (var key = Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Internet Settings"))
+                {
+                    if (key == null) return null;
+                    object enabled = key.GetValue("ProxyEnable");
+                    if (enabled == null || Convert.ToInt32(enabled) == 0) return null;
+                    string addr = key.GetValue("ProxyServer") as string;
+                    return string.IsNullOrEmpty(addr) ? null : addr;
+                }
+            }
+            catch { return null; }
+        }
+
+        private System.Collections.Generic.List<PreflightItem> CollectPreflight()
+        {
+            var list = new System.Collections.Generic.List<PreflightItem>();
+
+            // 1. Системный прокси. Трафик уходит на 127.0.0.1, а фильтр
+            //    WinDivert начинается с "!loopback" — winws его не видит.
+            string proxy = GetSystemProxy();
+            if (proxy != null)
+            {
+                list.Add(new PreflightItem
+                {
+                    Id = "proxy",
+                    Level = "warn",
+                    Title = "Включён системный прокси: " + proxy,
+                    Detail = "HTTP(S) приложений уходит на прокси через loopback, " +
+                             "обход такой трафик не видит. UDP (голос Discord, QUIC) " +
+                             "идёт мимо прокси и обрабатывается."
+                });
+            }
+            else
+            {
+                list.Add(new PreflightItem
+                {
+                    Id = "proxy",
+                    Level = "ok",
+                    Title = "Системный прокси выключен",
+                    Detail = "Трафик идёт напрямую — обход может его обработать."
+                });
+            }
+
+            // 2. Виртуальные адаптеры VPN. Сами по себе не ломают обход, но
+            //    меняют маршрут, и трафик может уходить мимо DPI провайдера.
+            try
+            {
+                var vpn = new System.Collections.Generic.List<string>();
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                    string d = (ni.Description + " " + ni.Name).ToLowerInvariant();
+                    if (d.Contains("tap-") || d.Contains("tun") || d.Contains("wintun") ||
+                        d.Contains("wireguard") || d.Contains("tailscale") ||
+                        d.Contains("openvpn") || d.Contains("proton") || d.Contains("nordlynx"))
+                    {
+                        vpn.Add(ni.Name);
+                    }
+                }
+                if (vpn.Count > 0)
+                {
+                    list.Add(new PreflightItem
+                    {
+                        Id = "vpn",
+                        Level = "warn",
+                        Title = "Активны виртуальные адаптеры: " + string.Join(", ", vpn.ToArray()),
+                        Detail = "Если через них уходит весь трафик, он не проходит DPI " +
+                                 "провайдера, и обход становится лишним звеном."
+                    });
+                }
+            }
+            catch { }
+
+            // 3. Чужие экземпляры winws. Два процесса на одном драйвере дерутся
+            //    за пакеты, и результат становится непредсказуемым.
+            try
+            {
+                int mine = 0;
+                lock (procLock) { if (winws != null && !winws.HasExited) mine = winws.Id; }
+
+                var alien = new System.Collections.Generic.List<int>();
+                foreach (var p in Process.GetProcessesByName("winws"))
+                {
+                    if (p.Id != mine) alien.Add(p.Id);
+                    p.Dispose();
+                }
+                if (alien.Count > 0)
+                {
+                    list.Add(new PreflightItem
+                    {
+                        Id = "winws",
+                        Level = "error",
+                        Title = "Найдены посторонние winws.exe: PID " + string.Join(", ", alien.ConvertAll(x => x.ToString()).ToArray()),
+                        Detail = "Два экземпляра ядра на одном драйвере WinDivert мешают " +
+                                 "друг другу. Закройте лишние: Настройки → Очистить зависшие winws."
+                    });
+                }
+            }
+            catch { }
+
+            // 4. Другие обходчики DPI. Они держат тот же драйвер.
+            try
+            {
+                var rivals = new System.Collections.Generic.List<string>();
+                string[] names = { "goodbyedpi", "GoodbyeDPI", "zapret", "ByeDPI", "byedpi", "spoofdpi" };
+                foreach (var n in names)
+                {
+                    foreach (var p in Process.GetProcessesByName(n))
+                    {
+                        if (!rivals.Contains(p.ProcessName)) rivals.Add(p.ProcessName);
+                        p.Dispose();
+                    }
+                }
+                if (rivals.Count > 0)
+                {
+                    list.Add(new PreflightItem
+                    {
+                        Id = "rivals",
+                        Level = "error",
+                        Title = "Запущен другой обходчик DPI: " + string.Join(", ", rivals.ToArray()),
+                        Detail = "Он занимает драйвер WinDivert. Одновременная работа двух " +
+                                 "обходчиков приводит к разрыву соединений."
+                    });
+                }
+            }
+            catch { }
+
+            return list;
+        }
+
+        private void SendPreflight()
+        {
+            try
+            {
+                var items = CollectPreflight();
+                var sb = new StringBuilder();
+                sb.Append("{\"type\":\"preflight\",\"items\":[");
+                for (int i = 0; i < items.Count; i++)
+                {
+                    if (i > 0) sb.Append(',');
+                    sb.AppendFormat("{{\"id\":\"{0}\",\"level\":\"{1}\",\"title\":\"{2}\",\"detail\":\"{3}\"}}",
+                        items[i].Id, items[i].Level,
+                        JsonEscape(items[i].Title), JsonEscape(items[i].Detail));
+                }
+                sb.Append("]}");
+                SendToWeb(sb.ToString());
+            }
+            catch (Exception ex)
+            {
+                SendLog("error", "Проверка окружения не удалась: " + ex.Message, "Preflight");
+            }
         }
 
         private string ResolveWinwsDir()
@@ -938,9 +1151,65 @@ namespace Zapret2App
             catch { }
         }
 
+        /// <summary>
+        /// Выделяет из строки вывода ядра признаки реальной работы.
+        ///
+        /// Считаются две вещи: применённые десинхронизации («dpi desync src=»)
+        /// и распознанные имена хостов («hostname: X»). Первое означает, что
+        /// профиль сработал; второе — что до ядра вообще доходит TLS с SNI.
+        /// Обе метрики нужны только при --debug, без него ядро молчит.
+        /// </summary>
+        private void CountActivity(string line)
+        {
+            if (line.Length < 8) return;
+
+            if (line.IndexOf("dpi desync src=", StringComparison.Ordinal) >= 0)
+            {
+                Interlocked.Increment(ref desyncCount);
+                return;
+            }
+
+            int h = line.IndexOf("hostname: ", StringComparison.Ordinal);
+            if (h >= 0)
+            {
+                string host = line.Substring(h + 10).Trim();
+                if (host.Length == 0 || host.Length > 253) return;
+                lock (activityLock)
+                {
+                    if (seenHosts.Add(host)) hostnameCount = seenHosts.Count;
+                }
+            }
+        }
+
+        private void ResetActivity()
+        {
+            Interlocked.Exchange(ref desyncCount, 0);
+            lock (activityLock) { seenHosts.Clear(); hostnameCount = 0; }
+            lastSentDesync = -1;
+            lastSentHosts = -1;
+        }
+
+        /// <summary>Отправляет счётчики в интерфейс, только если они изменились.</summary>
+        private void PushActivity()
+        {
+            if (autotuneRunning) return;
+
+            long d = Interlocked.Read(ref desyncCount);
+            long h;
+            lock (activityLock) { h = hostnameCount; }
+            if (d == lastSentDesync && h == lastSentHosts) return;
+            lastSentDesync = d;
+            lastSentHosts = h;
+
+            SendToWeb(string.Format(
+                "{{\"type\":\"activity\",\"desync\":{0},\"hosts\":{1}}}", d, h));
+        }
+
         private void HandleWinwsOutput(string line, bool isError)
         {
             if (string.IsNullOrEmpty(line)) return;
+
+            CountActivity(line);
 
             string lower = line.ToLowerInvariant();
             // Эвристика намеренно узкая: с --debug ядро печатает тысячи строк
@@ -1014,6 +1283,7 @@ namespace Zapret2App
 
             lock (lastErrors) { lastErrors.Clear(); }
             stopRequested = false;
+            ResetActivity();
 
             WarnIfSystemProxy();
             SendLog("info", "Рабочий каталог ядра: " + dir, "Runner");
@@ -1311,6 +1581,214 @@ namespace Zapret2App
             }
         }
 
+        // =================================================================
+        //  Автоподбор стратегии
+        //
+        //  Перебирает варианты обхода, поднимая ядро с каждым, и после
+        //  каждого делает настоящую проверку: TCP + TLS с нужным SNI.
+        //
+        //  Два принципиальных момента:
+        //   * проверка идёт через TcpClient/SslStream, а они системный прокси
+        //     НЕ используют. Иначе мы проверяли бы прокси, а не обход;
+        //   * имена резолвятся ОДИН раз до начала перебора, и дальше все
+        //     варианты идут на один и тот же IP — иначе DNS становится
+        //     ещё одной переменной и результаты нельзя сравнивать.
+        // =================================================================
+
+        private class TuneProbe
+        {
+            public string Host;
+            public string Ip;
+        }
+
+        /// <summary>Тихая проверка TLS: ничего не шлёт в интерфейс, только результат.</summary>
+        private async Task<bool> TryTlsProbe(string ip, string sni, int connectMs, int tlsMs)
+        {
+            try
+            {
+                using (var tcp = new TcpClient())
+                {
+                    var connect = tcp.ConnectAsync(ip, 443);
+                    if (await Task.WhenAny(connect, Task.Delay(connectMs)) != connect) return false;
+                    await connect;
+
+                    using (var ssl = new SslStream(tcp.GetStream(), false, (a, b, c, d) => true))
+                    {
+                        var tls = ssl.AuthenticateAsClientAsync(sni);
+                        if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls) return false;
+                        await tls;
+                        return true;
+                    }
+                }
+            }
+            catch { return false; }
+        }
+
+        private void SendTuneEvent(string json)
+        {
+            SendToWeb(json);
+        }
+
+        /// <summary>
+        /// Запускает ядро и ждёт, пока оно поднимется. Возвращает false, если
+        /// процесс умер сразу — такой вариант считается неработоспособным.
+        /// </summary>
+        private bool StartCoreForTune(string args)
+        {
+            StartZapretProcess(args);
+            lock (procLock)
+            {
+                return winws != null && !winws.HasExited;
+            }
+        }
+
+        private void RunAutotune(string payload)
+        {
+            if (autotuneRunning)
+            {
+                SendLog("warn", "Автоподбор уже идёт.", "Autotune");
+                return;
+            }
+
+            // payload: <restoreArgs> \x1f <host1,host2> \x1f id|label|args \x1e id|label|args ...
+            string[] head = payload.Split('\x1f');
+            if (head.Length < 3)
+            {
+                SendLog("error", "Некорректные данные для автоподбора.", "Autotune");
+                return;
+            }
+
+            string restoreArgs = head[0];
+            string[] hosts = head[1].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+            string[] rawVariants = head[2].Split(new[] { '\x1e' }, StringSplitOptions.RemoveEmptyEntries);
+
+            autotuneRunning = true;
+            autotuneCancel = false;
+
+            Task.Run(async () =>
+            {
+                var probes = new System.Collections.Generic.List<TuneProbe>();
+                try
+                {
+                    SendLog("info", "Автоподбор стратегии запущен.", "Autotune");
+
+                    // --- Резолвим цели один раз ---------------------------
+                    foreach (var h in hosts)
+                    {
+                        string host = h.Trim();
+                        if (host.Length == 0) continue;
+                        try
+                        {
+                            var addrs = Dns.GetHostAddresses(host);
+                            string ip = null;
+                            foreach (var a in addrs)
+                            {
+                                if (a.AddressFamily == AddressFamily.InterNetwork) { ip = a.ToString(); break; }
+                            }
+                            if (ip == null)
+                            {
+                                SendLog("error", "DNS не вернул IPv4 для " + host + " — проверка невозможна.", "Autotune");
+                                continue;
+                            }
+                            probes.Add(new TuneProbe { Host = host, Ip = ip });
+                            SendLog("info", string.Format("Цель {0} -> {1}", host, ip), "Autotune");
+                        }
+                        catch (Exception ex)
+                        {
+                            SendLog("error", "DNS для " + host + ": " + ex.Message, "Autotune");
+                        }
+                    }
+
+                    if (probes.Count == 0)
+                    {
+                        SendLog("error", "Не удалось определить ни одного адреса. Автоподбор отменён.", "Autotune");
+                        return;
+                    }
+
+                    // --- Перебор ------------------------------------------
+                    for (int i = 0; i < rawVariants.Length; i++)
+                    {
+                        if (autotuneCancel)
+                        {
+                            SendLog("warn", "Автоподбор прерван.", "Autotune");
+                            break;
+                        }
+
+                        string[] parts = rawVariants[i].Split(new[] { '|' }, 3);
+                        if (parts.Length < 3) continue;
+                        string id = parts[0], label = parts[1], args = parts[2];
+
+                        SendTuneEvent(string.Format(
+                            "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"starting\"}}",
+                            i, rawVariants.Length, JsonEscape(id)));
+
+                        StopZapretProcess(false);
+                        bool up = StartCoreForTune(args);
+
+                        if (!up)
+                        {
+                            SendLog("error", string.Format("[{0}] ядро не запустилось — вариант пропущен.", label), "Autotune");
+                            SendTuneEvent(string.Format(
+                                "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":false,\"passed\":0,\"total\":{2},\"ms\":0,\"detail\":\"ядро не запустилось\"}}",
+                                i, JsonEscape(id), probes.Count));
+                            continue;
+                        }
+
+                        // Драйвер уже загружен (StartZapretProcess ждал 1,5 с),
+                        // но conntrack ядра пуст — даём ему полсекунды.
+                        await Task.Delay(600);
+
+                        SendTuneEvent(string.Format(
+                            "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"testing\"}}",
+                            i, rawVariants.Length, JsonEscape(id)));
+
+                        int passed = 0;
+                        var sw = Stopwatch.StartNew();
+                        foreach (var pr in probes)
+                        {
+                            if (autotuneCancel) break;
+                            bool ok = await TryTlsProbe(pr.Ip, pr.Host, 4000, 6000);
+                            if (ok) passed++;
+                        }
+                        sw.Stop();
+
+                        bool allOk = passed == probes.Count;
+                        SendLog(allOk ? "success" : "warn",
+                            string.Format("[{0}] пройдено {1} из {2} за {3} мс", label, passed, probes.Count, sw.ElapsedMilliseconds),
+                            "Autotune");
+
+                        SendTuneEvent(string.Format(
+                            "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":{2},\"passed\":{3},\"total\":{4},\"ms\":{5},\"detail\":\"\"}}",
+                            i, JsonEscape(id), allOk ? "true" : "false", passed, probes.Count, sw.ElapsedMilliseconds));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    SendLog("error", "Автоподбор прерван ошибкой: " + ex.Message, "Autotune");
+                }
+                finally
+                {
+                    // Возвращаем ядро в исходное состояние, чтобы автоподбор
+                    // не оставлял систему со случайным вариантом.
+                    StopZapretProcess(false);
+                    autotuneRunning = false;
+
+                    if (!string.IsNullOrEmpty(restoreArgs))
+                    {
+                        SendLog("info", "Возвращаю ядро к активной стратегии.", "Autotune");
+                        StartZapretProcess(restoreArgs);
+                    }
+                    else
+                    {
+                        SendStatus("disconnected", 0);
+                    }
+
+                    SendLog("success", "Автоподбор завершён.", "Autotune");
+                    SendTuneEvent("{\"type\":\"autotune_done\"}");
+                }
+            });
+        }
+
         private void SendDiagnosticStep(string targetId, int stepIndex, string status, string detail, int latency)
         {
             string safeDetail = detail.Replace("\\", "\\\\").Replace("\"", "\\\"");
@@ -1407,6 +1885,18 @@ namespace Zapret2App
                     else if (rawMsg == "run_diagnostics")
                     {
                         RunRealDiagnostics();
+                    }
+                    else if (rawMsg == "run_preflight")
+                    {
+                        SendPreflight();
+                    }
+                    else if (rawMsg == "autotune_cancel")
+                    {
+                        autotuneCancel = true;
+                    }
+                    else if (rawMsg.StartsWith("autotune:"))
+                    {
+                        RunAutotune(rawMsg.Substring("autotune:".Length));
                     }
                     else if (rawMsg == "close")
                     {

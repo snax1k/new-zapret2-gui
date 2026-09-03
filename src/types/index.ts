@@ -97,6 +97,27 @@ export type QuickToggleBooleanKey = {
   [K in keyof QuickToggleState]: QuickToggleState[K] extends boolean ? K : never
 }[keyof QuickToggleState];
 
+/** Строка предполётной проверки окружения. */
+export interface PreflightItem {
+  id: string;
+  level: 'ok' | 'warn' | 'error';
+  title: string;
+  detail: string;
+}
+
+/** Состояние одного варианта в автоподборе стратегии. */
+export interface AutotuneRow {
+  id: YoutubeStrategyId;
+  label: string;
+  /** idle — ещё не проверялся, starting — поднимается ядро, testing — идёт проверка. */
+  phase: 'idle' | 'starting' | 'testing' | 'done';
+  ok: boolean;
+  passed: number;
+  total: number;
+  ms: number;
+  detail: string;
+}
+
 export interface LogEntry {
   id: string;
   timestamp: string;

@@ -1,12 +1,14 @@
-import React from 'react';
-import { Youtube, Mic, ShieldCheck, Globe, Wifi, Cpu } from 'lucide-react';
+import React, { useState } from 'react';
+import { Youtube, Mic, ShieldCheck, Globe, Wifi, Cpu, Wand2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { QuickToggleBooleanKey } from '../types';
 import { YOUTUBE_STRATEGIES, findYoutubeStrategy } from '../lib/zapretCommand';
+import { AutotuneModal } from './AutotuneModal';
 
 export const QuickToggles: React.FC = () => {
-  const { quickToggles, toggleQuickSetting, setYoutubeStrategy, theme } = useApp();
+  const { quickToggles, toggleQuickSetting, setYoutubeStrategy, isAutotuneRunning, theme } = useApp();
   const activeStrategy = findYoutubeStrategy(quickToggles.youtubeStrategy);
+  const [tunerOpen, setTunerOpen] = useState(false);
 
   const toggleItems: {
     key: QuickToggleBooleanKey;
@@ -118,7 +120,20 @@ export const QuickToggles: React.FC = () => {
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
             Стратегия YouTube и Google
           </span>
-          <span className="text-[10px] text-slate-500">Меняет только профиль TCP 443</span>
+
+          <button
+            onClick={() => setTunerOpen(true)}
+            className={`flex items-center gap-1.5 text-[10px] font-semibold px-2 py-1 rounded-lg border transition-colors ${
+              isAutotuneRunning
+                ? 'border-indigo-500/50 bg-indigo-500/20 text-indigo-400'
+                : theme === 'dark'
+                  ? 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Wand2 className="w-3 h-3 text-indigo-500" />
+            {isAutotuneRunning ? 'Идёт подбор...' : 'Подобрать автоматически'}
+          </button>
         </div>
 
         <div className="flex flex-wrap gap-1.5">
@@ -146,10 +161,13 @@ export const QuickToggles: React.FC = () => {
         </div>
 
         <p className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400 px-0.5">
-          {activeStrategy.hint} Если YouTube не открывается — переключайте варианты
-          по очереди: ядро перезапускается сразу, обновите вкладку браузера.
+          {activeStrategy.hint} Меняет только профиль TCP 443 — Discord и Telegram
+          не затрагиваются. Перебирать варианты вручную не нужно: «Подобрать
+          автоматически» проверит их все и покажет, что сработало.
         </p>
       </div>
+
+      <AutotuneModal open={tunerOpen} onClose={() => setTunerOpen(false)} />
     </div>
   );
 };

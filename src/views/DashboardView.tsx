@@ -3,6 +3,7 @@ import { PowerButton } from '../components/PowerButton';
 import { PresetSelector } from '../components/PresetSelector';
 import { QuickToggles } from '../components/QuickToggles';
 import { StatusCards } from '../components/StatusCards';
+import { PreflightPanel } from '../components/PreflightPanel';
 import { Activity, Terminal } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -13,6 +14,9 @@ export const DashboardView: React.FC = () => {
     <div className="h-full flex flex-col justify-between p-6 space-y-6 overflow-y-auto">
       {/* Top Banner / Stats */}
       <StatusCards />
+
+      {/* Что помешает обходу сработать — до того, как жать «Включить». */}
+      <PreflightPanel />
 
       {/* Center Power Section */}
       <div className="py-2 flex items-center justify-center">

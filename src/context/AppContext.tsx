@@ -13,13 +13,16 @@ import {
   CloseBehavior,
   UpdateInfo,
   QuickToggleBooleanKey,
-  YoutubeStrategyId
+  YoutubeStrategyId,
+  PreflightItem,
+  AutotuneRow
 } from '../types';
 import {
   buildPresetArgs,
   buildPresetCommand,
   DEFAULT_TOGGLES,
-  findYoutubeStrategy
+  findYoutubeStrategy,
+  YOUTUBE_STRATEGIES
 } from '../lib/zapretCommand';
 
 // Домены, к которым применяется обход. Хостлист-файл list-general.txt лежит
@@ -221,6 +224,16 @@ interface AppContextType {
   quickToggles: QuickToggleState;
   toggleQuickSetting: (key: QuickToggleBooleanKey) => void;
   setYoutubeStrategy: (id: YoutubeStrategyId) => void;
+
+  /** Предполётная проверка окружения: что помешает обходу сработать. */
+  preflight: PreflightItem[];
+  runPreflight: () => void;
+
+  /** Автоподбор стратегии YouTube. */
+  autotuneRows: AutotuneRow[];
+  isAutotuneRunning: boolean;
+  startAutotune: () => void;
+  cancelAutotune: () => void;
   logs: LogEntry[];
   addLog: (level: LogEntry['level'], message: string, source?: string) => void;
   clearLogs: () => void;
@@ -250,6 +263,10 @@ interface AppContextType {
     uptimeSeconds: number;
     activeRulesCount: number;
     driverStatus: string;
+    /** Сколько раз ядро вмешалось в трафик (строки «dpi desync src=»). */
+    desyncCount: number;
+    /** Сколько разных имён хостов ядро распознало. */
+    hostCount: number;
   };
   activeCommand: string;
 }
@@ -333,7 +350,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [logs, setLogs] = useState<LogEntry[]>(() => {
     const t = new Date().toTimeString().split(' ')[0];
     return [
-      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.0.9 запущен', source: 'Core' },
+      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.0 запущен', source: 'Core' },
       { id: '2', timestamp: t, level: 'info', message: 'Ядро zapret v72.13 (winws.exe, WinDivert 64-bit) готово', source: 'WinWS' }
     ];
   });
@@ -342,8 +359,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     pid: 0,
     uptimeSeconds: 0,
     activeRulesCount: 0,
-    driverStatus: 'Выключен'
+    driverStatus: 'Выключен',
+    // Сколько раз ядро реально вмешалось в трафик и сколько имён хостов
+    // распознало. Ноль при работающем ядре означает, что до winws трафик
+    // не доходит — это единственная метрика, которая это показывает.
+    desyncCount: 0,
+    hostCount: 0
   });
+
+  const [preflight, setPreflight] = useState<PreflightItem[]>([]);
+  const [autotuneRows, setAutotuneRows] = useState<AutotuneRow[]>([]);
+  const [isAutotuneRunning, setIsAutotuneRunning] = useState(false);
 
   // Handle IPC Messages from Native C# Host
   useEffect(() => {
@@ -374,6 +400,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   : data.status === 'error' ? 'Ошибка запуска'
                   : 'Остановлен'
             }));
+          } else if (data.type === 'activity') {
+            setStats(prev => ({ ...prev, desyncCount: data.desync || 0, hostCount: data.hosts || 0 }));
+          } else if (data.type === 'preflight') {
+            setPreflight(Array.isArray(data.items) ? data.items : []);
+          } else if (data.type === 'autotune_step') {
+            setAutotuneRows(prev => prev.map((r, i) =>
+              i === data.index ? { ...r, phase: data.phase } : r));
+          } else if (data.type === 'autotune_result') {
+            setAutotuneRows(prev => prev.map((r, i) =>
+              i === data.index
+                ? { ...r, phase: 'done', ok: !!data.ok, passed: data.passed || 0,
+                    total: data.total || 0, ms: data.ms || 0, detail: data.detail || '' }
+                : r));
+          } else if (data.type === 'autotune_done') {
+            setIsAutotuneRunning(false);
           } else if (data.type === 'diag_step') {
             setDiagnostics(prev => prev.map(item => {
               if (item.id === data.targetId) {
@@ -643,6 +684,63 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
+  const runPreflight = () => {
+    if (window.chrome?.webview) window.chrome.webview.postMessage('run_preflight');
+  };
+
+  // Проверка окружения выполняется один раз при запуске: её результат нужен
+  // ещё до того, как пользователь нажмёт «Включить».
+  useEffect(() => {
+    if (window.chrome?.webview) {
+      const t = setTimeout(() => window.chrome!.webview!.postMessage('run_preflight'), 800);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
+  /**
+   * Автоподбор стратегии YouTube.
+   *
+   * Нативная сторона поднимает ядро с каждым вариантом и делает настоящую
+   * проверку TCP+TLS. Вариант «off» в переборе не участвует: он не стратегия,
+   * а эталон для сравнения, и проверять его отдельно смысла нет — если он
+   * пройдёт, значит обход для YouTube вообще не нужен.
+   */
+  const startAutotune = () => {
+    if (isAutotuneRunning) return;
+    if (!window.chrome?.webview) {
+      addLog('error', 'Автоподбор доступен только внутри приложения.', 'Autotune');
+      return;
+    }
+
+    const variants = YOUTUBE_STRATEGIES.filter(s => s.id !== 'off');
+    setAutotuneRows(variants.map(s => ({
+      id: s.id, label: s.label, phase: 'idle' as const,
+      ok: false, passed: 0, total: 0, ms: 0, detail: ''
+    })));
+    setIsAutotuneRunning(true);
+
+    // Куда вернуть ядро после перебора: если обход был включён — к текущей
+    // стратегии, если выключен — оставить выключенным.
+    const restore = status === 'connected'
+      ? buildPresetArgs(activePreset, quickToggles)
+      : '';
+
+    const hosts = 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com';
+    const body = variants
+      .map(s => [s.id, s.label, buildPresetArgs(activePreset, { ...quickToggles, youtubeStrategy: s.id })].join('|'))
+      .join('\x1e');
+
+    addLog('info', `Автоподбор: ${variants.length} вариантов, цели ${hosts}`, 'Autotune');
+    window.chrome.webview.postMessage('save_lists:' + serializeLists());
+    window.chrome.webview.postMessage('autotune:' + [restore, hosts, body].join('\x1f'));
+  };
+
+  const cancelAutotune = () => {
+    if (!isAutotuneRunning) return;
+    addLog('warn', 'Отмена автоподбора...', 'Autotune');
+    if (window.chrome?.webview) window.chrome.webview.postMessage('autotune_cancel');
+  };
+
   const setYoutubeStrategy = (id: YoutubeStrategyId) => {
     setQuickToggles(prev => {
       if (prev.youtubeStrategy === id) return prev;
@@ -843,6 +941,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         quickToggles,
         toggleQuickSetting,
         setYoutubeStrategy,
+        preflight,
+        runPreflight,
+        autotuneRows,
+        isAutotuneRunning,
+        startAutotune,
+        cancelAutotune,
         logs,
         addLog,
         clearLogs,
