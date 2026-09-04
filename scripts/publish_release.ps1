@@ -35,12 +35,46 @@ $tag = "v$Version"
 Write-Host "== Релиз $tag для $Repo" -ForegroundColor Cyan
 
 # --- 2. Токен --------------------------------------------------------
-$token = $env:GITHUB_TOKEN
+# Два источника, по приоритету:
+#   1) переменная окружения GITHUB_TOKEN — для разового запуска;
+#   2) DPAPI-файл, созданный scripts\save_release_token.ps1.
+#
+# Второй вариант позволяет запускать публикацию, ни разу не показывая токен:
+# он расшифровывается прямо в SecureString и нигде не печатается.
+$token = $null
+$tokenSource = ""
+
+if ($env:GITHUB_TOKEN) {
+    $token = $env:GITHUB_TOKEN
+    $tokenSource = "переменная окружения GITHUB_TOKEN"
+} else {
+    $tokenPath = Join-Path $env:LOCALAPPDATA "Zapret2-GUI\release-token.xml"
+    if (Test-Path $tokenPath) {
+        try {
+            $secure = Import-Clixml -Path $tokenPath
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+            try {
+                $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            } finally {
+                [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+            $tokenSource = "сохранённый токен ($tokenPath)"
+        } catch {
+            Write-Host "Не удалось расшифровать сохранённый токен: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "Сохраните заново: scripts\save_release_token.ps1" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+}
+
 if (-not $token) {
-    Write-Host "Не задан GITHUB_TOKEN." -ForegroundColor Red
-    Write-Host 'Выполните в этом окне:  $env:GITHUB_TOKEN = "ваш_токен"' -ForegroundColor Yellow
+    Write-Host "Токен не найден." -ForegroundColor Red
+    Write-Host "Сохраните его один раз (ввод скрытый, в репозиторий не попадёт):" -ForegroundColor Yellow
+    Write-Host "  powershell -ExecutionPolicy Bypass -File scripts\save_release_token.ps1" -ForegroundColor Yellow
+    Write-Host 'Либо разово:  $env:GITHUB_TOKEN = "ваш_токен"' -ForegroundColor DarkGray
     exit 1
 }
+Write-Host "   источник токена: $tokenSource" -ForegroundColor DarkGray
 $headers = @{
     Authorization          = "Bearer $token"
     Accept                 = "application/vnd.github+json"
@@ -105,9 +139,18 @@ $payload = @{
     prerelease = $false
 } | ConvertTo-Json -Depth 3
 
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" `
-    -Method Post -Headers $headers -Body ([Text.Encoding]::UTF8.GetBytes($payload)) `
-    -ContentType "application/json"
+try {
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" `
+        -Method Post -Headers $headers -Body ([Text.Encoding]::UTF8.GetBytes($payload)) `
+        -ContentType "application/json"
+} catch {
+    # Сообщение исключения печатаем без заголовков: там лежит токен.
+    Write-Host "Не удалось создать релиз: $($_.Exception.Message)" -ForegroundColor Red
+    if ($_.Exception.Response) {
+        Write-Host ("HTTP " + [int]$_.Exception.Response.StatusCode) -ForegroundColor Red
+    }
+    exit 1
+}
 
 Write-Host "   id $($release.id)" -ForegroundColor DarkGray
 

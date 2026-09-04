@@ -62,3 +62,13 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# Страховка: токены и секреты не должны попадать в репозиторий ни при каких
+# обстоятельствах. Сохранённый токен релизов и так лежит вне дерева
+# (%LOCALAPPDATA%\Zapret2-GUI\release-token.xml, зашифрован через DPAPI),
+# но если кто-то положит файл рядом — он не уедет в git.
+*token*.xml
+*.token
+.env
+.env.*
+secrets.json
