@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Globe, Plus, Search, Trash2, Download, Upload, CheckCircle2, XCircle } from 'lucide-react';
+import { Globe, Plus, Search, Trash2, Download, Upload, CheckCircle2, XCircle, SearchX, ListPlus } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { HostlistItem } from '../types';
 
@@ -162,9 +162,45 @@ export const HostlistsView: React.FC = () => {
 
         <div className="overflow-y-auto flex-1 divide-y divide-black/5 dark:divide-white/[0.03]">
           {filteredList.length === 0 ? (
-            <div className="p-8 text-center text-xs text-slate-400">
-              Список пуст. Встроенные списки уже работают — здесь добавляются только свои домены.
-            </div>
+            hostlists.length === 0 ? (
+              <div className="p-10 flex flex-col items-center text-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500">
+                  <ListPlus className="w-5 h-5" />
+                </div>
+                <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Своих доменов пока нет — и это нормально
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 max-w-md">
+                  Встроенные списки (list-general, list-google, list-exclude) уже работают,
+                  YouTube и Discord обрабатываются без вашего участия. Добавляйте сюда домен,
+                  только если конкретный сайт не открывается: обход применится и к нему.
+                </p>
+              </div>
+            ) : (
+              <div className="p-10 flex flex-col items-center text-center gap-2">
+                <div className="w-10 h-10 rounded-xl bg-slate-500/10 border border-slate-500/20 flex items-center justify-center text-slate-400">
+                  <SearchX className="w-5 h-5" />
+                </div>
+                <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                  Ничего не нашлось
+                </div>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {searchQuery
+                    ? <>По запросу «{searchQuery}» совпадений нет.</>
+                    : <>В этой категории пока пусто.</>}
+                  {' '}Всего в списке {hostlists.length}{' '}
+                  {hostlists.length === 1 ? 'домен' : hostlists.length < 5 ? 'домена' : 'доменов'}.
+                </p>
+                {(searchQuery || selectedCategory !== 'all') && (
+                  <button
+                    onClick={() => { setSearchQuery(''); setSelectedCategory('all'); }}
+                    className="mt-1 px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[11px] font-bold text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10 transition-colors"
+                  >
+                    Показать все
+                  </button>
+                )}
+              </div>
+            )
           ) : (
             filteredList.map((item) => (
               <div

@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.1.2"
+    [string]$Version = "0.1.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,18 +19,30 @@ Write-Host "== Корень проекта: $root" -ForegroundColor Cyan
 # молчать о вышедшем.
 $nativeMatch = Select-String -Path "src-native\NativeApp.cs" -Pattern 'AppVersion\s*=\s*"([\d.]+)"' | Select-Object -First 1
 $webMatch = Select-String -Path "src\context\AppContext.tsx" -Pattern "APP_VERSION\s*=\s*'([\d.]+)'" | Select-Object -First 1
-if (-not $nativeMatch -or -not $webMatch) { throw "Не удалось прочитать версию из исходников" }
+$pkgMatch = Select-String -Path "package.json" -Pattern '"version"\s*:\s*"([\d.]+)"' | Select-Object -First 1
+if (-not $nativeMatch -or -not $webMatch -or -not $pkgMatch) { throw "Не удалось прочитать версию из исходников" }
 $nativeVer = $nativeMatch.Matches[0].Groups[1].Value
 $webVer = $webMatch.Matches[0].Groups[1].Value
+$pkgVer = $pkgMatch.Matches[0].Groups[1].Value
 
-if ($nativeVer -ne $Version -or $webVer -ne $Version) {
+if ($nativeVer -ne $Version -or $webVer -ne $Version -or $pkgVer -ne $Version) {
     Write-Host "Версии разошлись:" -ForegroundColor Red
     Write-Host ("  build.ps1      : " + $Version)
     Write-Host ("  NativeApp.cs   : " + $nativeVer)
     Write-Host ("  AppContext.tsx : " + $webVer)
+    Write-Host ("  package.json   : " + $pkgVer)
     throw "Приведите версии к одному значению перед сборкой"
 }
-Write-Host "== Версия $Version согласована во всех трёх местах" -ForegroundColor DarkGray
+
+# Версию нельзя писать в вёрстке руками: заголовок окна и стартовая запись
+# в логе берут её из APP_VERSION, иначе она тихо расходится со сборкой.
+$hardcoded = Select-String -Path "src\components\*.tsx", "src\views\*.tsx" -Pattern 'v\d+\.\d+\.\d+-portable'
+if ($hardcoded) {
+    Write-Host "Версия зашита в разметке:" -ForegroundColor Red
+    $hardcoded | ForEach-Object { Write-Host ("  " + $_.Path + ":" + $_.LineNumber) }
+    throw "Замените зашитую версию на APP_VERSION"
+}
+Write-Host "== Версия $Version согласована во всех четырёх местах" -ForegroundColor DarkGray
 
 # --- 1. Сборка веб-интерфейса (Vite) --------------------------------
 Write-Host "== [1/5] Сборка фронтенда (tsc + vite build)..." -ForegroundColor Cyan

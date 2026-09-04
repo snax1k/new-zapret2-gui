@@ -21,6 +21,13 @@ export const DiagnosticsView: React.FC = () => {
   const { diagnostics, runDiagnostics, isDiagnosticsRunning, setActiveTab, theme } = useApp();
   const [expandedId, setExpandedId] = useState<string>('yt-web');
 
+  // Итог считаем по реальным статусам. Раньше здесь висела зашитая надпись
+  // «100% УСПЕХ» — она показывалась всегда, в том числе когда тест ни разу
+  // не запускали и когда цели не отвечали вовсе.
+  const okCount = diagnostics.filter(d => d.status === 'success').length;
+  const failCount = diagnostics.filter(d => d.status === 'blocked' || d.status === 'error').length;
+  const neverRun = okCount + failCount === 0 && !isDiagnosticsRunning;
+
   return (
     <div className="h-full flex flex-col p-6 space-y-5 overflow-y-auto select-none">
       {/* Header */}
@@ -70,13 +77,37 @@ export const DiagnosticsView: React.FC = () => {
           </div>
           <div>
             <div className="text-xs font-bold flex items-center gap-2">
-              <span className="text-slate-900 dark:text-slate-100">Автоподбор стратегии для вашего провайдера</span>
-              <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/30 font-bold">
-                100% УСПЕХ
-              </span>
+              <span className="text-slate-900 dark:text-slate-100">Результат последней проверки</span>
+              {!neverRun && (
+                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${
+                  failCount === 0
+                    ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border-emerald-500/30'
+                    : okCount === 0
+                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300 border-rose-500/30'
+                    : 'bg-amber-500/20 text-amber-600 dark:text-amber-300 border-amber-500/30'
+                }`}>
+                  {okCount} ИЗ {okCount + failCount}
+                </span>
+              )}
             </div>
             <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-              Лучший результат: <strong className="text-indigo-600 dark:text-indigo-300">YouTube 4K + Discord Voice (Split2 + badseq)</strong>
+              {isDiagnosticsRunning ? (
+                <>Идёт проверка целей — подождите, результат появится ниже.</>
+              ) : neverRun ? (
+                <>Тест ещё не запускался. Нажмите «Запустить полный тест» — проверка
+                пройдёт по каждой цели пошагово и покажет, на каком именно шаге рвётся
+                соединение.</>
+              ) : failCount === 0 ? (
+                <>Отвечают все проверенные цели: <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>. Обход справляется.</>
+              ) : okCount === 0 ? (
+                <>Не отвечает ни одна цель из {failCount}. Проверьте, включён ли обход,
+                и загляните в «Проверку окружения» на главной — системный прокси или
+                VPN уводят трафик мимо ядра.</>
+              ) : (
+                <>Отвечают <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>,
+                не отвечают <strong className="text-rose-600 dark:text-rose-300">{failCount}</strong>.
+                Разверните неудачную цель — видно, на каком шаге обрыв.</>
+              )}
             </p>
           </div>
         </div>
@@ -93,7 +124,9 @@ export const DiagnosticsView: React.FC = () => {
       {/* Target Items Accordion List */}
       <div className="space-y-3">
         <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-          Результаты ступенчатого тестирования (GoodCheck Inspector)
+          {neverRun
+            ? 'Цели проверки — результатов пока нет'
+            : 'Результаты ступенчатого тестирования (GoodCheck Inspector)'}
         </span>
 
         <div className="space-y-3">

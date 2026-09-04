@@ -174,4 +174,6 @@ export interface UpdateInfo {
   assetSha256: string;
   /** Текст ошибки последней попытки обновления. */
   error: string;
+  /** Когда последний раз удалось спросить GitHub. ISO, пусто — ещё ни разу. */
+  lastCheckedAt: string;
 }

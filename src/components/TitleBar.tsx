@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Shield, Minus, Square, Copy, X, Cpu, Sun, Moon, Lock } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, APP_VERSION } from '../context/AppContext';
 
 export const TitleBar: React.FC = () => {
   const { status, engineMode, theme, toggleTheme, closeBehavior, setShowTrayToast, addLog } = useApp();
@@ -96,7 +96,7 @@ export const TitleBar: React.FC = () => {
         </span>
 
         <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400 border border-black/10 dark:border-white/10 font-medium">
-          v0.1.2-portable
+          v{APP_VERSION}-portable
         </span>
       </div>
 

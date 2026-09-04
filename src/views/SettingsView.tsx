@@ -18,8 +18,19 @@ import {
   Download,
   HardDrive
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, BUNDLED_CORE_VERSION } from '../context/AppContext';
 import { CloseBehavior } from '../types';
+
+/** «2026-09-05, 14:31» вместо ISO-строки, которую читать невозможно. */
+const formatChecked = (iso: string): string => {
+  if (!iso) return 'ещё не проверялось';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'ещё не проверялось';
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+};
 
 export const SettingsView: React.FC = () => {
   const {
@@ -29,6 +40,8 @@ export const SettingsView: React.FC = () => {
     toggleTheme,
     updateInfo,
     checkForUpdates,
+    autoCheckUpdates,
+    setAutoCheckUpdates,
     setIsUpdateModalOpen,
     closeBehavior,
     setCloseBehavior,
@@ -134,7 +147,7 @@ export const SettingsView: React.FC = () => {
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
               <RefreshCw className={`w-4 h-4 text-indigo-500 ${updateInfo.isChecking ? 'animate-spin' : ''}`} />
-              Автообновление релизов ядра с GitHub (bol-van/zapret)
+              Обновление приложения с GitHub (snax1k/new-zapret2-gui)
             </span>
 
             {updateInfo.hasUpdate ? (
@@ -147,7 +160,7 @@ export const SettingsView: React.FC = () => {
               </button>
             ) : (
               <button
-                onClick={checkForUpdates}
+                onClick={() => checkForUpdates(false)}
                 disabled={updateInfo.isChecking}
                 className="px-3.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-800 dark:text-slate-200 border border-black/10 dark:border-white/10 text-xs font-bold transition-colors flex items-center gap-1.5"
               >
@@ -159,26 +172,62 @@ export const SettingsView: React.FC = () => {
 
           <div className="p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-500/20 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-600 dark:text-slate-400">Версия GUI: <strong>v0.1.2-portable</strong></span>
+              <span className="text-slate-600 dark:text-slate-400">
+                Версия приложения: <strong>v{updateInfo.currentVersion}-portable</strong>
+              </span>
 
               {updateInfo.hasUpdate ? (
                 <span className="text-indigo-600 dark:text-indigo-300 font-semibold flex items-center gap-1">
                   <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                  Доступен новый релиз ядра: {updateInfo.latestVersion}
+                  Вышла версия {updateInfo.latestVersion}
                 </span>
-              ) : (
+              ) : updateInfo.lastCheckedAt ? (
                 <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                  Ядро актуально: {updateInfo.currentVersion}
+                  Установлена последняя версия
+                </span>
+              ) : (
+                <span className="text-slate-500 dark:text-slate-400 font-semibold">
+                  Обновления ещё не проверялись
                 </span>
               )}
             </div>
 
             <div className="text-[11px] text-slate-600 dark:text-slate-300">
-              <strong className="text-slate-900 dark:text-slate-100">Как обновляется ядро:</strong>{' '}
-              winws.exe и WinDivert зашиты в этот .exe как ресурсы, поэтому заменить их
-              на лету нельзя. Проверка сравнивает версию в сборке с последним релизом
-              на GitHub и открывает страницу релиза — обновление ставится новой сборкой.
+              <strong className="text-slate-900 dark:text-slate-100">Что именно обновляется:</strong>{' '}
+              само приложение. Сборка скачивается из релиза, сверяется по SHA-256 и
+              подменяется при перезапуске. Без файла контрольных сумм установка не
+              выполняется — иначе мы запускали бы непроверенный файл от администратора.
+            </div>
+
+            <div className="text-[11px] text-slate-600 dark:text-slate-300">
+              <strong className="text-slate-900 dark:text-slate-100">Ядро zapret так не обновляется:</strong>{' '}
+              winws.exe и WinDivert зашиты в .exe ресурсами и приезжают только с новой
+              сборкой приложения. Сейчас в сборке {BUNDLED_CORE_VERSION}.
+            </div>
+          </div>
+
+          <div
+            onClick={() => setAutoCheckUpdates(!autoCheckUpdates)}
+            className="flex items-center justify-between gap-3 p-3 rounded-xl border cursor-pointer transition-colors bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 hover:bg-black/10 dark:hover:bg-white/5"
+          >
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                Проверять обновления при запуске
+              </div>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
+                Один запрос к GitHub, не чаще раза в шесть часов. Окно не открывается —
+                о новой версии сообщает плашка в боковом меню.
+                {' '}Последняя проверка: {formatChecked(updateInfo.lastCheckedAt)}.
+              </p>
+            </div>
+
+            <div className={`w-9 h-5 rounded-full shrink-0 transition-colors relative ${
+              autoCheckUpdates ? 'bg-indigo-600' : 'bg-slate-400/40 dark:bg-slate-600'
+            }`}>
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                autoCheckUpdates ? 'translate-x-4' : 'translate-x-0'
+              }`} />
             </div>
           </div>
         </div>

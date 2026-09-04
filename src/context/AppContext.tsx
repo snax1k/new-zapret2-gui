@@ -32,7 +32,17 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.1.2';
+export const APP_VERSION = '0.1.3';
+
+/** Когда в последний раз ходили на GitHub за релизом. ISO-строка. */
+const UPDATE_CHECK_KEY = 'zapret2_update_checked_v1';
+/** Разрешена ли автопроверка при запуске. */
+const UPDATE_AUTO_KEY = 'zapret2_update_auto_v1';
+/**
+ * Чаще раза в шесть часов дёргать GitHub незачем: у неавторизованных
+ * запросов лимит 60 в час на адрес, а релизы выходят не ежечасно.
+ */
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /** Репозиторий, откуда берутся релизы приложения. */
 export const APP_REPO = 'snax1k/new-zapret2-gui';
@@ -275,7 +285,10 @@ interface AppContextType {
   runDiagnostics: () => void;
   isDiagnosticsRunning: boolean;
   updateInfo: UpdateInfo;
-  checkForUpdates: () => void;
+  /** silent — автопроверка при запуске: без модалки и без лишних записей в лог. */
+  checkForUpdates: (silent?: boolean) => void;
+  autoCheckUpdates: boolean;
+  setAutoCheckUpdates: (v: boolean) => void;
   dismissUpdate: () => void;
   startAutoUpdate: () => void;
   openReleasePage: () => void;
@@ -311,6 +324,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setCloseBehavior = (b: CloseBehavior) => {
     localStorage.setItem('zapret2_close_v5', b);
     setCloseBehaviorState(b);
+  };
+  // По умолчанию включено, но выключить можно: запрос к GitHub при каждом
+  // запуске — не то, что стоит навязывать без спроса.
+  const [autoCheckUpdates, setAutoCheckUpdatesState] = useState<boolean>(
+    () => localStorage.getItem(UPDATE_AUTO_KEY) !== 'off'
+  );
+  const setAutoCheckUpdates = (v: boolean) => {
+    localStorage.setItem(UPDATE_AUTO_KEY, v ? 'on' : 'off');
+    setAutoCheckUpdatesState(v);
   };
   const [showTrayToast, setShowTrayToast] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string>(
@@ -372,15 +394,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     isInstalled: false,
     assetUrl: '',
     assetSha256: '',
-    error: ''
+    error: '',
+    lastCheckedAt: localStorage.getItem(UPDATE_CHECK_KEY) || ''
   });
 
 
   const [logs, setLogs] = useState<LogEntry[]>(() => {
     const t = new Date().toTimeString().split(' ')[0];
     return [
-      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.2 запущен', source: 'Core' },
-      { id: '2', timestamp: t, level: 'info', message: 'Ядро zapret v72.13 (winws.exe, WinDivert 64-bit) готово', source: 'WinWS' }
+      { id: '1', timestamp: t, level: 'info', message: `Zapret2 Control Center v${APP_VERSION} запущен`, source: 'Core' },
+      { id: '2', timestamp: t, level: 'info', message: `Ядро zapret ${BUNDLED_CORE_VERSION} (winws.exe, WinDivert 64-bit) готово`, source: 'WinWS' }
     ];
   });
 
@@ -917,9 +940,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * SHA256SUMS.txt. Без контрольной суммы установка не выполняется — иначе
    * мы запускали бы непроверенный exe с правами администратора.
    */
-  const checkForUpdates = async () => {
+  const checkForUpdates = async (silent: boolean = false) => {
     setUpdateInfo(prev => ({ ...prev, isChecking: true, error: '' }));
-    addLog('info', `Запрос последнего релиза ${APP_REPO} на GitHub...`, 'UpdateChecker');
+    if (!silent) addLog('info', `Запрос последнего релиза ${APP_REPO} на GitHub...`, 'UpdateChecker');
 
     try {
       const resp = await fetch(`https://api.github.com/repos/${APP_REPO}/releases/latest`, {
@@ -928,12 +951,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
       if (resp.status === 404) {
         setUpdateInfo(prev => ({ ...prev, isChecking: false, hasUpdate: false, isInstalled: true }));
-        addLog('info', 'В репозитории пока нет ни одного релиза.', 'UpdateChecker');
+        if (!silent) addLog('info', 'В репозитории пока нет ни одного релиза.', 'UpdateChecker');
         return;
       }
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
 
       const data = await resp.json();
+      // Время удачного ответа: по нему считается, пора ли спрашивать снова.
+      const checkedAt = new Date().toISOString();
+      localStorage.setItem(UPDATE_CHECK_KEY, checkedAt);
       const latest: string = String(data.tag_name || '').replace(/^v/i, '');
       const hasUpdate = !!latest && compareVersions(latest, APP_VERSION) > 0;
 
@@ -966,6 +992,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         assetUrl: exe ? exe.browser_download_url : '',
         assetSha256: sha,
         error: '',
+        lastCheckedAt: checkedAt,
         highlights: String(data.body || '')
           .split(/\r?\n/)
           .map((l: string) => l.replace(/^[-*+#\s]+/, '').trim())
@@ -977,16 +1004,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         addLog('warn', `Доступна версия ${latest}, установлена ${APP_VERSION}.`, 'UpdateChecker');
         if (!exe) addLog('warn', 'В релизе нет файла *-portable.exe — установить нечего.', 'UpdateChecker');
         else if (!sha) addLog('warn', 'В релизе нет SHA256SUMS.txt — установка недоступна, только ручная загрузка.', 'UpdateChecker');
-        setIsUpdateModalOpen(true);
-      } else {
+        // При автопроверке окно не открываем: человек запустил программу
+        // ради обхода, а не ради диалога. Плашка в боковом меню уже видна.
+        if (!silent) setIsUpdateModalOpen(true);
+      } else if (!silent) {
         addLog('success', `Установлена актуальная версия ${APP_VERSION}.`, 'UpdateChecker');
       }
     } catch (e: any) {
       setUpdateInfo(prev => ({ ...prev, isChecking: false }));
-      addLog('error', 'Не удалось проверить обновления: ' + (e?.message || e), 'UpdateChecker');
+      // Нет сети при запуске — обычное дело, пугать красной строкой не за что.
+      addLog(
+        silent ? 'info' : 'error',
+        (silent ? 'Автопроверка обновлений не удалась: ' : 'Не удалось проверить обновления: ') + (e?.message || e),
+        'UpdateChecker'
+      );
     }
 
     // Версия ядра — отдельная справка. Обновить его отсюда нельзя.
+    // При автопроверке пропускаем: это второй запрос к GitHub на каждый
+    // запуск ради строчки, которую никто не просил.
+    if (silent) return;
     try {
       const r = await fetch('https://api.github.com/repos/bol-van/zapret/releases/latest', {
         headers: { Accept: 'application/vnd.github+json' }
@@ -1008,6 +1045,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const dismissUpdate = () => {
     setUpdateInfo(prev => ({ ...prev, hasUpdate: false }));
   };
+
+  /**
+   * Автопроверка при запуске. Один раз за сеанс, с задержкой, не чаще
+   * чем раз в шесть часов.
+   *
+   * Задержка нужна не для красоты: сразу после старта приложение
+   * распаковывает ресурсы и поднимает ядро, и лезть в сеть в этот момент
+   * значит соревноваться с ним за внимание. Найденное обновление молча
+   * зажигает плашку в боковом меню — окно не открывается.
+   */
+  useEffect(() => {
+    if (!autoCheckUpdates) return;
+
+    const last = localStorage.getItem(UPDATE_CHECK_KEY);
+    if (last) {
+      const age = Date.now() - new Date(last).getTime();
+      // NaN даёт false и проверку не блокирует — это верное поведение
+      // при испорченном значении в хранилище.
+      if (age < UPDATE_CHECK_INTERVAL_MS) return;
+    }
+
+    const t = setTimeout(() => { checkForUpdates(true); }, 8000);
+    return () => clearTimeout(t);
+    // Намеренно только при монтировании: это проверка «при запуске»,
+    // а не при каждом изменении настройки.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * Скачивает новую сборку и заменяет ею текущий exe.
@@ -1115,6 +1179,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isDiagnosticsRunning,
         updateInfo,
         checkForUpdates,
+        autoCheckUpdates,
+        setAutoCheckUpdates,
         dismissUpdate,
         startAutoUpdate,
         openReleasePage,
