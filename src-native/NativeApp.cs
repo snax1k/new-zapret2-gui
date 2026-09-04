@@ -1259,10 +1259,16 @@ namespace Zapret2App
                     int pid = Process.GetCurrentProcess().Id;
                     string cmdPath = Path.Combine(dir, "apply_update.cmd");
 
+                    // Скрипт целиком в ASCII, пути приходят через переменные
+                    // окружения. Так надо: cmd.exe разбирает .cmd в OEM-кодировке
+                    // (866 на русской Windows), а Encoding.Default — это ANSI
+                    // (1251). Записанный в ANSI кириллический путь читался как
+                    // "╥хёЄ" вместо "Тест", copy падал, и обновление молча не
+                    // ставилось у всех, у кого кириллица в пути. Окружение
+                    // передаётся процессу в Unicode и от кодировок не зависит.
+                    //
                     // ping вместо timeout: timeout требует консоли, а .cmd
-                    // запускается скрытым. Файл пишется в ANSI — путь к exe
-                    // может содержать кириллицу, а cmd.exe читает системную
-                    // кодировку, не UTF-8.
+                    // запускается скрытым.
                     var script = new StringBuilder();
                     script.AppendLine("@echo off");
                     script.AppendLine(":wait");
@@ -1272,15 +1278,21 @@ namespace Zapret2App
                     script.AppendLine("  goto wait");
                     script.AppendLine(")");
                     script.AppendLine("ping -n 2 127.0.0.1 >nul");
-                    script.AppendLine("copy /y \"" + tmp + "\" \"" + target + "\" >nul");
+                    script.AppendLine("copy /y \"%ZAPRET_UPDATE_SRC%\" \"%ZAPRET_UPDATE_DST%\" >nul");
                     script.AppendLine("if errorlevel 1 goto fail");
-                    script.AppendLine("start \"\" \"" + target + "\"");
+                    // Скачанная сборка весит десятки мегабайт, оставлять её незачем.
+                    script.AppendLine("del /q \"%ZAPRET_UPDATE_SRC%\" >nul 2>nul");
+                    script.AppendLine("start \"\" \"%ZAPRET_UPDATE_DST%\"");
                     script.AppendLine("(goto) 2>nul & del \"%~f0\"");
                     script.AppendLine(":fail");
-                    script.AppendLine("echo Не удалось заменить " + target);
-                    script.AppendLine("pause");
+                    // Никакого pause: консоли нет (CreateNoWindow), и процесс
+                    // висел бы вечно невидимым. Причину оставляем в файле.
+                    script.AppendLine("> \"%~dp0update-failed.log\" echo copy failed");
+                    script.AppendLine(">> \"%~dp0update-failed.log\" echo src=%ZAPRET_UPDATE_SRC%");
+                    script.AppendLine(">> \"%~dp0update-failed.log\" echo dst=%ZAPRET_UPDATE_DST%");
+                    script.AppendLine("exit /b 1");
 
-                    File.WriteAllText(cmdPath, script.ToString(), Encoding.Default);
+                    File.WriteAllText(cmdPath, script.ToString(), Encoding.ASCII);
 
                     SendUpdateProgress(100, "Перезапуск...");
                     SendLog("success", "Обновление до " + version + " готово, приложение перезапускается.", "Updater");
@@ -1293,6 +1305,8 @@ namespace Zapret2App
                         UseShellExecute = false,
                         CreateNoWindow = true
                     };
+                    psi.EnvironmentVariables["ZAPRET_UPDATE_SRC"] = tmp;
+                    psi.EnvironmentVariables["ZAPRET_UPDATE_DST"] = target;
                     Process.Start(psi);
 
                     // Ядро надо снять до выхода, иначе останется висеть winws
