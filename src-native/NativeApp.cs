@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.1.1";
+        public const string AppVersion = "0.1.2";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -1101,6 +1101,220 @@ namespace Zapret2App
             }
         }
 
+        // =================================================================
+        //  Обновление самого приложения из GitHub Releases
+        //
+        //  Запущенный exe нельзя перезаписать, поэтому последовательность
+        //  такая: скачать рядом -> сверить SHA-256 -> запустить .cmd, который
+        //  дождётся выхода процесса по PID, подменит файл и стартует новую
+        //  версию. Приложение помечено requireAdministrator, порождённый
+        //  процесс наследует повышение прав.
+        // =================================================================
+
+        private void SendUpdateProgress(int percent, string step)
+        {
+            SendToWeb(string.Format(
+                "{{\"type\":\"update_progress\",\"percent\":{0},\"step\":\"{1}\"}}",
+                percent, JsonEscape(step)));
+        }
+
+        private void SendUpdateError(string message)
+        {
+            SendLog("error", message, "Updater");
+            SendToWeb(string.Format(
+                "{{\"type\":\"update_error\",\"message\":\"{0}\"}}", JsonEscape(message)));
+        }
+
+        /// <summary>
+        /// Ссылка должна вести на GitHub. Проверка нужна не от GitHub, а от
+        /// самих себя: адрес приходит из интерфейса, и без неё подменённая
+        /// страница могла бы заставить скачать и запустить чужой exe.
+        /// </summary>
+        private static bool IsTrustedUpdateUrl(string url)
+        {
+            try
+            {
+                var u = new Uri(url);
+                if (u.Scheme != "https") return false;
+                string h = u.Host.ToLowerInvariant();
+                return h == "github.com" || h.EndsWith(".github.com")
+                    || h == "githubusercontent.com" || h.EndsWith(".githubusercontent.com");
+            }
+            catch { return false; }
+        }
+
+        private static string Sha256OfFile(string path)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            using (var fs = File.OpenRead(path))
+            {
+                byte[] hash = sha.ComputeHash(fs);
+                var sb = new StringBuilder(hash.Length * 2);
+                foreach (byte b in hash) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        private void DownloadAndApplyUpdate(string payload)
+        {
+            // payload: <url>|<sha256>|<version>
+            string[] parts = (payload ?? string.Empty).Split(new[] { '|' }, 3);
+            if (parts.Length < 3)
+            {
+                SendUpdateError("Некорректные данные обновления.");
+                return;
+            }
+
+            string url = parts[0].Trim();
+            string expectedSha = parts[1].Trim().ToLowerInvariant();
+            string version = parts[2].Trim();
+
+            if (!IsTrustedUpdateUrl(url))
+            {
+                SendUpdateError("Ссылка на обновление ведёт не на GitHub — загрузка отменена: " + url);
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                string dir = null;
+                string tmp = null;
+                try
+                {
+                    string root = Path.GetDirectoryName(logDir); // %LOCALAPPDATA%\Zapret2-GUI
+                    dir = Path.Combine(root, "update");
+                    if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                    tmp = Path.Combine(dir, "Zapret2-GUI-v" + version + "-portable.exe");
+                    if (File.Exists(tmp)) File.Delete(tmp);
+
+                    SendUpdateProgress(0, "Загрузка " + version + "...");
+                    SendLog("info", "Загрузка обновления: " + url, "Updater");
+
+                    // GitHub требует TLS 1.2; в .NET 4.0 он по умолчанию выключен.
+                    try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }
+                    catch { }
+
+                    // WebClient по умолчанию использует системный прокси —
+                    // это здесь правильно: у пользователя интернет идёт через него.
+                    using (var wc = new WebClient())
+                    {
+                        wc.Headers.Add("User-Agent", "Zapret2-GUI/" + AppVersion);
+                        var done = new ManualResetEvent(false);
+                        Exception failure = null;
+
+                        wc.DownloadProgressChanged += (s, e) =>
+                        {
+                            // 0-90% отдаём загрузке, остальное проверке и подмене.
+                            SendUpdateProgress(
+                                (int)(e.ProgressPercentage * 0.9),
+                                string.Format("Загрузка: {0:N1} из {1:N1} МБ",
+                                    e.BytesReceived / 1048576.0, e.TotalBytesToReceive / 1048576.0));
+                        };
+                        wc.DownloadFileCompleted += (s, e) =>
+                        {
+                            failure = e.Error;
+                            done.Set();
+                        };
+
+                        wc.DownloadFileAsync(new Uri(url), tmp);
+                        done.WaitOne();
+                        if (failure != null) throw failure;
+                    }
+
+                    if (!File.Exists(tmp) || new FileInfo(tmp).Length < 100000)
+                    {
+                        SendUpdateError("Загруженный файл слишком мал — похоже, это не сборка.");
+                        return;
+                    }
+
+                    SendUpdateProgress(92, "Проверка контрольной суммы...");
+                    string actual = Sha256OfFile(tmp);
+
+                    if (expectedSha.Length == 64)
+                    {
+                        if (actual != expectedSha)
+                        {
+                            SendUpdateError(
+                                "Контрольная сумма не совпала. Ожидалось " + expectedSha +
+                                ", получено " + actual + ". Установка отменена.");
+                            try { File.Delete(tmp); } catch { }
+                            return;
+                        }
+                        SendLog("success", "SHA-256 совпал: " + actual, "Updater");
+                    }
+                    else
+                    {
+                        // Без суммы в релизе ставить нельзя: мы бы запускали
+                        // непроверенный exe с правами администратора.
+                        SendUpdateError(
+                            "В релизе нет файла SHA256SUMS.txt — проверить сборку нечем. " +
+                            "Установка отменена, скачайте вручную со страницы релиза.");
+                        return;
+                    }
+
+                    SendUpdateProgress(96, "Подготовка замены...");
+
+                    string target = Application.ExecutablePath;
+                    int pid = Process.GetCurrentProcess().Id;
+                    string cmdPath = Path.Combine(dir, "apply_update.cmd");
+
+                    // ping вместо timeout: timeout требует консоли, а .cmd
+                    // запускается скрытым. Файл пишется в ANSI — путь к exe
+                    // может содержать кириллицу, а cmd.exe читает системную
+                    // кодировку, не UTF-8.
+                    var script = new StringBuilder();
+                    script.AppendLine("@echo off");
+                    script.AppendLine(":wait");
+                    script.AppendLine("tasklist /FI \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul");
+                    script.AppendLine("if not errorlevel 1 (");
+                    script.AppendLine("  ping -n 2 127.0.0.1 >nul");
+                    script.AppendLine("  goto wait");
+                    script.AppendLine(")");
+                    script.AppendLine("ping -n 2 127.0.0.1 >nul");
+                    script.AppendLine("copy /y \"" + tmp + "\" \"" + target + "\" >nul");
+                    script.AppendLine("if errorlevel 1 goto fail");
+                    script.AppendLine("start \"\" \"" + target + "\"");
+                    script.AppendLine("(goto) 2>nul & del \"%~f0\"");
+                    script.AppendLine(":fail");
+                    script.AppendLine("echo Не удалось заменить " + target);
+                    script.AppendLine("pause");
+
+                    File.WriteAllText(cmdPath, script.ToString(), Encoding.Default);
+
+                    SendUpdateProgress(100, "Перезапуск...");
+                    SendLog("success", "Обновление до " + version + " готово, приложение перезапускается.", "Updater");
+
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = "cmd.exe",
+                        Arguments = "/c \"" + cmdPath + "\"",
+                        WorkingDirectory = dir,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    };
+                    Process.Start(psi);
+
+                    // Ядро надо снять до выхода, иначе останется висеть winws
+                    // с загруженным драйвером.
+                    this.BeginInvoke(new Action(() =>
+                    {
+                        isExiting = true;
+                        StopZapretProcess(false);
+                        KillZombieWinDivert();
+                        Application.Exit();
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    var inner = ex;
+                    while (inner.InnerException != null) inner = inner.InnerException;
+                    SendUpdateError("Не удалось обновиться: " + inner.Message);
+                    try { if (tmp != null && File.Exists(tmp)) File.Delete(tmp); } catch { }
+                }
+            });
+        }
+
         private string ResolveWinwsDir()
         {
             if (!string.IsNullOrEmpty(binPath) && File.Exists(Path.Combine(binPath, "winws.exe")))
@@ -1893,6 +2107,10 @@ namespace Zapret2App
                     else if (rawMsg == "autotune_cancel")
                     {
                         autotuneCancel = true;
+                    }
+                    else if (rawMsg.StartsWith("download_update:"))
+                    {
+                        DownloadAndApplyUpdate(rawMsg.Substring("download_update:".Length));
                     }
                     else if (rawMsg.StartsWith("autotune:"))
                     {

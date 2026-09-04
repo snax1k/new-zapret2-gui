@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.1.1"
+    [string]$Version = "0.1.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -11,6 +11,26 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 Write-Host "== Корень проекта: $root" -ForegroundColor Cyan
+
+# --- 0. Версия должна совпадать в трёх местах -----------------------
+# Приложение сравнивает свою версию с тегом последнего релиза на GitHub.
+# Если AppVersion в NativeApp.cs и APP_VERSION в AppContext.tsx разойдутся,
+# проверка обновлений начнёт врать: предлагать уже установленное либо
+# молчать о вышедшем.
+$nativeMatch = Select-String -Path "src-native\NativeApp.cs" -Pattern 'AppVersion\s*=\s*"([\d.]+)"' | Select-Object -First 1
+$webMatch = Select-String -Path "src\context\AppContext.tsx" -Pattern "APP_VERSION\s*=\s*'([\d.]+)'" | Select-Object -First 1
+if (-not $nativeMatch -or -not $webMatch) { throw "Не удалось прочитать версию из исходников" }
+$nativeVer = $nativeMatch.Matches[0].Groups[1].Value
+$webVer = $webMatch.Matches[0].Groups[1].Value
+
+if ($nativeVer -ne $Version -or $webVer -ne $Version) {
+    Write-Host "Версии разошлись:" -ForegroundColor Red
+    Write-Host ("  build.ps1      : " + $Version)
+    Write-Host ("  NativeApp.cs   : " + $nativeVer)
+    Write-Host ("  AppContext.tsx : " + $webVer)
+    throw "Приведите версии к одному значению перед сборкой"
+}
+Write-Host "== Версия $Version согласована во всех трёх местах" -ForegroundColor DarkGray
 
 # --- 1. Сборка веб-интерфейса (Vite) --------------------------------
 Write-Host "== [1/5] Сборка фронтенда (tsc + vite build)..." -ForegroundColor Cyan
@@ -98,7 +118,16 @@ $cscArgs = @(
 & $csc $cscArgs
 if ($LASTEXITCODE -ne 0) { throw "Компиляция завершилась с ошибкой (код $LASTEXITCODE)" }
 
-# --- 5. Итог ---------------------------------------------------------
+# --- 5. Контрольная сумма --------------------------------------------
+# Кладётся рядом со сборкой сразу: её заливает scripts\publish_release.ps1,
+# и по ней же приложение проверяет скачанный файл перед установкой. Без
+# SHA256SUMS.txt в релизе установка из интерфейса не выполняется.
+$hash = (Get-FileHash $outExe -Algorithm SHA256).Hash.ToLower()
+$sums = Join-Path $outDir "SHA256SUMS.txt"
+"$hash  Zapret2-GUI-v$Version-portable.exe" | Out-File $sums -Encoding ascii -NoNewline
+Write-Host "== SHA-256: $hash" -ForegroundColor DarkGray
+
+# --- 6. Итог ---------------------------------------------------------
 Write-Host "== [5/5] Готово" -ForegroundColor Green
 $info = Get-Item $outExe
 Write-Host ("   {0}  ({1:N2} МБ)" -f $info.FullName, ($info.Length / 1MB)) -ForegroundColor Green

@@ -1,11 +1,15 @@
 import React from 'react';
-import { Sparkles, Download, CheckCircle2, X, Loader2, HardDrive, ShieldCheck, ArrowRight } from 'lucide-react';
+import { Sparkles, Download, CheckCircle2, X, Loader2, ShieldCheck, ArrowRight, AlertTriangle, ExternalLink } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 export const UpdateModal: React.FC = () => {
-  const { isUpdateModalOpen, setIsUpdateModalOpen, updateInfo, startAutoUpdate, theme } = useApp();
+  const { isUpdateModalOpen, setIsUpdateModalOpen, updateInfo, startAutoUpdate, openReleasePage, theme } = useApp();
 
   if (!isUpdateModalOpen) return null;
+
+  // Ставить без контрольной суммы нельзя: exe запускается с правами
+  // администратора, и непроверенный файл здесь недопустим.
+  const canInstall = !!updateInfo.assetUrl && !!updateInfo.assetSha256;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn select-none">
@@ -19,8 +23,10 @@ export const UpdateModal: React.FC = () => {
               <Sparkles className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold">Автообновление ядра Zapret</h3>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">Прямая загрузка и распаковка с GitHub bol-van/zapret</p>
+              <h3 className="text-sm font-bold">Обновление Zapret2 Control Center</h3>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Загрузка из GitHub Releases с проверкой SHA-256
+              </p>
             </div>
           </div>
 
@@ -64,6 +70,24 @@ export const UpdateModal: React.FC = () => {
           </ul>
         </div>
 
+        {!canInstall && !updateInfo.isDownloading && (
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-start gap-2 text-[11px] leading-relaxed">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              {updateInfo.assetUrl
+                ? 'В релизе нет файла SHA256SUMS.txt, проверить сборку нечем. Установка из приложения отключена — скачайте вручную со страницы релиза.'
+                : 'В релизе нет собранного .exe. Скачайте вручную со страницы релиза.'}
+            </span>
+          </div>
+        )}
+
+        {updateInfo.error && (
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 flex items-start gap-2 text-[11px] leading-relaxed">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>{updateInfo.error}</span>
+          </div>
+        )}
+
         {/* Progress bar when downloading */}
         {updateInfo.isDownloading && (
           <div className="space-y-2 p-3 rounded-xl bg-black/20 border border-white/5">
@@ -84,11 +108,10 @@ export const UpdateModal: React.FC = () => {
           </div>
         )}
 
-        {/* Installed Success */}
-        {updateInfo.isInstalled && (
+        {updateInfo.isInstalled && !updateInfo.hasUpdate && (
           <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 flex items-center gap-2 text-xs font-bold">
             <ShieldCheck className="w-4 h-4 shrink-0" />
-            <span>Все файлы (winws.exe, драйвер WinDivert, списки) успешно обновлены!</span>
+            <span>Установлена актуальная версия.</span>
           </div>
         )}
 
@@ -96,12 +119,21 @@ export const UpdateModal: React.FC = () => {
         <div className="flex items-center justify-end gap-2 pt-2 border-t border-black/5 dark:border-white/5">
           <button
             onClick={() => setIsUpdateModalOpen(false)}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-200"
+            disabled={updateInfo.isDownloading}
+            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-30 mr-auto"
           >
-            {updateInfo.isInstalled ? 'Закрыть' : 'Отмена'}
+            {updateInfo.hasUpdate ? 'Позже' : 'Закрыть'}
           </button>
 
-          {!updateInfo.isInstalled && (
+          <button
+            onClick={openReleasePage}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-300 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 border border-black/5 dark:border-white/5"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>Страница релиза</span>
+          </button>
+
+          {updateInfo.hasUpdate && canInstall && (
             <button
               onClick={startAutoUpdate}
               disabled={updateInfo.isDownloading}
@@ -112,7 +144,9 @@ export const UpdateModal: React.FC = () => {
               }`}
             >
               <Download className="w-3.5 h-3.5" />
-              <span>Открыть страницу релиза на GitHub</span>
+              <span>
+                {updateInfo.isDownloading ? 'Загрузка...' : 'Скачать и установить'}
+              </span>
             </button>
           )}
         </div>

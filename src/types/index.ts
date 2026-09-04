@@ -168,4 +168,10 @@ export interface UpdateInfo {
   releaseTitle: string;
   highlights: string[];
   isInstalled: boolean;
+  /** Прямая ссылка на .exe из ассетов релиза. Пусто — ставить нечего. */
+  assetUrl: string;
+  /** SHA-256 сборки из SHA256SUMS.txt. Без неё установка не выполняется. */
+  assetSha256: string;
+  /** Текст ошибки последней попытки обновления. */
+  error: string;
 }

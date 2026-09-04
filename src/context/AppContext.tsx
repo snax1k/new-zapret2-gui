@@ -31,6 +31,28 @@ import {
 /** Версия ядра zapret, вшитая в сборку (bin/winws.exe). */
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
+/** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
+export const APP_VERSION = '0.1.2';
+
+/** Репозиторий, откуда берутся релизы приложения. */
+export const APP_REPO = 'snax1k/new-zapret2-gui';
+
+/**
+ * Сравнивает версии вида 0.1.2 и v0.1.10.
+ * Возвращает >0, если a новее b. Части сравниваются как числа, иначе
+ * «0.1.10» оказалась бы старше «0.1.9».
+ */
+export function compareVersions(a: string, b: string): number {
+  const norm = (v: string) => v.trim().replace(/^v/i, '').split(/[.\-+]/);
+  const pa = norm(a), pb = norm(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = parseInt(pa[i] || '0', 10) || 0;
+    const nb = parseInt(pb[i] || '0', 10) || 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
 // Маркер каталога списков. Нативный хост подставляет вместо него абсолютный
 // путь к host-list\ перед запуском ядра.
 //
@@ -256,6 +278,7 @@ interface AppContextType {
   checkForUpdates: () => void;
   dismissUpdate: () => void;
   startAutoUpdate: () => void;
+  openReleasePage: () => void;
   isUpdateModalOpen: boolean;
   setIsUpdateModalOpen: (open: boolean) => void;
   killZombieWinDivert: () => void;
@@ -337,23 +360,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo>({
     isChecking: false,
     isDownloading: false,
-    downloadProgress: 100,
+    downloadProgress: 0,
     downloadStep: '',
     hasUpdate: false,
-    currentVersion: BUNDLED_CORE_VERSION,
-    latestVersion: BUNDLED_CORE_VERSION,
+    currentVersion: APP_VERSION,
+    latestVersion: APP_VERSION,
     releaseDate: '',
-    releaseUrl: 'https://github.com/bol-van/zapret/releases/latest',
-    releaseTitle: 'Ядро zapret (bol-van/zapret)',
+    releaseUrl: `https://github.com/${APP_REPO}/releases/latest`,
+    releaseTitle: 'Zapret2 Control Center',
     highlights: [],
-    isInstalled: true
+    isInstalled: false,
+    assetUrl: '',
+    assetSha256: '',
+    error: ''
   });
 
 
   const [logs, setLogs] = useState<LogEntry[]>(() => {
     const t = new Date().toTimeString().split(' ')[0];
     return [
-      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.1 запущен', source: 'Core' },
+      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.2 запущен', source: 'Core' },
       { id: '2', timestamp: t, level: 'info', message: 'Ядро zapret v72.13 (winws.exe, WinDivert 64-bit) готово', source: 'WinWS' }
     ];
   });
@@ -403,6 +429,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 data.status === 'connected' ? 'Активен (фильтрация)'
                   : data.status === 'error' ? 'Ошибка запуска'
                   : 'Остановлен'
+            }));
+          } else if (data.type === 'update_progress') {
+            setUpdateInfo(prev => ({
+              ...prev,
+              isDownloading: data.percent < 100,
+              downloadProgress: data.percent || 0,
+              downloadStep: data.step || '',
+              error: ''
+            }));
+          } else if (data.type === 'update_error') {
+            setUpdateInfo(prev => ({
+              ...prev,
+              isDownloading: false,
+              downloadProgress: 0,
+              downloadStep: '',
+              error: data.message || 'Неизвестная ошибка'
             }));
           } else if (data.type === 'activity') {
             setStats(prev => ({ ...prev, desyncCount: data.desync || 0, hostCount: data.hosts || 0 }));
@@ -863,46 +905,104 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  /**
+   * Проверка обновлений самого приложения.
+   *
+   * Сравниваются AppVersion сборки и tag_name последнего релиза в репозитории
+   * пользователя. Заодно, отдельной строкой в лог, проверяется версия ядра
+   * bol-van/zapret — но обновлять ядро приложение не умеет: winws.exe и
+   * WinDivert вшиты в exe ресурсами и приезжают только с новой сборкой.
+   *
+   * Из ассетов релиза берутся два файла: сборка *-portable.exe и
+   * SHA256SUMS.txt. Без контрольной суммы установка не выполняется — иначе
+   * мы запускали бы непроверенный exe с правами администратора.
+   */
   const checkForUpdates = async () => {
-    setUpdateInfo(prev => ({ ...prev, isChecking: true }));
-    addLog('info', 'Запрос последнего релиза bol-van/zapret на GitHub...', 'UpdateChecker');
+    setUpdateInfo(prev => ({ ...prev, isChecking: true, error: '' }));
+    addLog('info', `Запрос последнего релиза ${APP_REPO} на GitHub...`, 'UpdateChecker');
 
     try {
-      const resp = await fetch('https://api.github.com/repos/bol-van/zapret/releases/latest', {
+      const resp = await fetch(`https://api.github.com/repos/${APP_REPO}/releases/latest`, {
         headers: { Accept: 'application/vnd.github+json' }
       });
+
+      if (resp.status === 404) {
+        setUpdateInfo(prev => ({ ...prev, isChecking: false, hasUpdate: false, isInstalled: true }));
+        addLog('info', 'В репозитории пока нет ни одного релиза.', 'UpdateChecker');
+        return;
+      }
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
+
       const data = await resp.json();
-      const latest: string = data.tag_name || BUNDLED_CORE_VERSION;
-      const hasUpdate = latest !== BUNDLED_CORE_VERSION;
+      const latest: string = String(data.tag_name || '').replace(/^v/i, '');
+      const hasUpdate = !!latest && compareVersions(latest, APP_VERSION) > 0;
+
+      const assets: any[] = Array.isArray(data.assets) ? data.assets : [];
+      const exe = assets.find(a => /-portable\.exe$/i.test(a.name || ''));
+      const sums = assets.find(a => /^SHA256SUMS\.txt$/i.test(a.name || ''));
+
+      // Контрольную сумму тянем сразу: если её нет, кнопку установки
+      // показывать нельзя, и пользователь должен узнать об этом заранее.
+      let sha = '';
+      if (hasUpdate && exe && sums) {
+        try {
+          const t = await (await fetch(sums.browser_download_url)).text();
+          const line = t.split(/\r?\n/).find(l => l.toLowerCase().includes(String(exe.name).toLowerCase()));
+          const m = line && line.match(/\b([a-f0-9]{64})\b/i);
+          if (m) sha = m[1].toLowerCase();
+        } catch { /* сумма не обязательна для показа, но обязательна для установки */ }
+      }
 
       setUpdateInfo(prev => ({
         ...prev,
         isChecking: false,
         hasUpdate,
         isInstalled: !hasUpdate,
-        latestVersion: latest,
+        currentVersion: APP_VERSION,
+        latestVersion: latest || APP_VERSION,
         releaseDate: (data.published_at || '').slice(0, 10),
         releaseUrl: data.html_url || prev.releaseUrl,
-        releaseTitle: data.name || prev.releaseTitle,
+        releaseTitle: data.name || `Zapret2 Control Center v${latest}`,
+        assetUrl: exe ? exe.browser_download_url : '',
+        assetSha256: sha,
+        error: '',
         highlights: String(data.body || '')
           .split(/\r?\n/)
-          .map((l: string) => l.replace(/^[-*+]\s*/, '').trim())
+          .map((l: string) => l.replace(/^[-*+#\s]+/, '').trim())
           .filter(Boolean)
-          .slice(0, 4)
+          .slice(0, 5)
       }));
 
-      addLog(
-        hasUpdate ? 'warn' : 'success',
-        hasUpdate
-          ? `Доступна новая версия ядра: ${latest} (в сборке ${BUNDLED_CORE_VERSION})`
-          : `Ядро актуально: ${BUNDLED_CORE_VERSION}`,
-        'UpdateChecker'
-      );
+      if (hasUpdate) {
+        addLog('warn', `Доступна версия ${latest}, установлена ${APP_VERSION}.`, 'UpdateChecker');
+        if (!exe) addLog('warn', 'В релизе нет файла *-portable.exe — установить нечего.', 'UpdateChecker');
+        else if (!sha) addLog('warn', 'В релизе нет SHA256SUMS.txt — установка недоступна, только ручная загрузка.', 'UpdateChecker');
+        setIsUpdateModalOpen(true);
+      } else {
+        addLog('success', `Установлена актуальная версия ${APP_VERSION}.`, 'UpdateChecker');
+      }
     } catch (e: any) {
       setUpdateInfo(prev => ({ ...prev, isChecking: false }));
       addLog('error', 'Не удалось проверить обновления: ' + (e?.message || e), 'UpdateChecker');
     }
+
+    // Версия ядра — отдельная справка. Обновить его отсюда нельзя.
+    try {
+      const r = await fetch('https://api.github.com/repos/bol-van/zapret/releases/latest', {
+        headers: { Accept: 'application/vnd.github+json' }
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const core = d.tag_name || BUNDLED_CORE_VERSION;
+        addLog(
+          core === BUNDLED_CORE_VERSION ? 'info' : 'warn',
+          core === BUNDLED_CORE_VERSION
+            ? `Ядро в сборке актуально: ${BUNDLED_CORE_VERSION}`
+            : `У ядра вышла версия ${core}, в сборке ${BUNDLED_CORE_VERSION} — приедет со следующей сборкой приложения.`,
+          'UpdateChecker'
+        );
+      }
+    } catch { /* справочная информация, молчим */ }
   };
 
   const dismissUpdate = () => {
@@ -910,19 +1010,39 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   /**
-   * Автоматическая замена бинарников ядра внутри portable-сборки не выполняется:
-   * winws.exe и WinDivert зашиты в exe как ресурсы. Открываем страницу релиза,
-   * чтобы пользователь мог обновиться осознанно.
+   * Скачивает новую сборку и заменяет ею текущий exe.
+   *
+   * Установка выполняется только при наличии контрольной суммы: без неё мы
+   * запускали бы непроверенный файл с правами администратора. Нативная
+   * сторона сверяет SHA-256 сама и отказывается ставить при расхождении.
    */
   const startAutoUpdate = () => {
-    const url = updateInfo.releaseUrl || 'https://github.com/bol-van/zapret/releases/latest';
-    addLog('info', 'Открываю страницу релиза ядра: ' + url, 'UpdateChecker');
+    if (!window.chrome?.webview) {
+      addLog('error', 'Установка доступна только внутри приложения.', 'Updater');
+      return;
+    }
+    if (!updateInfo.assetUrl || !updateInfo.assetSha256) {
+      addLog('warn', 'Нет проверенной сборки — открываю страницу релиза.', 'Updater');
+      openReleasePage();
+      return;
+    }
+
+    addLog('info', `Загрузка версии ${updateInfo.latestVersion}...`, 'Updater');
+    setUpdateInfo(prev => ({ ...prev, isDownloading: true, downloadProgress: 0, downloadStep: 'Подготовка...', error: '' }));
+    window.chrome.webview.postMessage(
+      'download_update:' + [updateInfo.assetUrl, updateInfo.assetSha256, updateInfo.latestVersion].join('|')
+    );
+  };
+
+  /** Запасной путь: показать релиз в браузере и скачать вручную. */
+  const openReleasePage = () => {
+    const url = updateInfo.releaseUrl || `https://github.com/${APP_REPO}/releases/latest`;
+    addLog('info', 'Открываю страницу релиза: ' + url, 'Updater');
     if (window.chrome?.webview) {
       window.chrome.webview.postMessage('open_url:' + url);
     } else {
       window.open(url, '_blank');
     }
-    setIsUpdateModalOpen(false);
   };
 
   const killZombieWinDivert = () => {
@@ -997,6 +1117,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         checkForUpdates,
         dismissUpdate,
         startAutoUpdate,
+        openReleasePage,
         isUpdateModalOpen,
         setIsUpdateModalOpen,
         killZombieWinDivert,
