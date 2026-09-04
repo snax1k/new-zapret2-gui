@@ -13,9 +13,20 @@ import { useApp } from '../context/AppContext';
  *
  * Когда всё в порядке — это одна строка, а не список из галочек.
  */
+/** Свёрнута ли панель. Выбор переживает перезапуск: он про привычку. */
+const COLLAPSED_KEY = 'zapret2_preflight_collapsed_v1';
+
 export const PreflightPanel: React.FC = () => {
   const { preflight, runPreflight, theme } = useApp();
-  const [expanded, setExpanded] = useState(false);
+  const [collapsed, setCollapsedState] = useState<boolean>(
+    () => localStorage.getItem(COLLAPSED_KEY) === '1'
+  );
+  const [showAll, setShowAll] = useState(false);
+
+  const setCollapsed = (v: boolean) => {
+    localStorage.setItem(COLLAPSED_KEY, v ? '1' : '0');
+    setCollapsedState(v);
+  };
 
   if (preflight.length === 0) return null;
 
@@ -37,8 +48,11 @@ export const PreflightPanel: React.FC = () => {
       ? `Помех: ${problems.length} — одна из них блокирует работу`
       : `Помех: ${problems.length} — обход может не сработать`;
 
-  // Развёрнутый список показывает всё, свёрнутый — только проблемы.
-  const visible = expanded ? preflight : problems;
+  // Три состояния, а не два. Раньше стрелка переключала «проблемы» и «всё»,
+  // то есть при любом положении предупреждения оставались на экране и кнопка
+  // выглядела сломанной. Теперь она именно сворачивает — до одной строки.
+  const visible = collapsed ? [] : showAll ? preflight : problems;
+  const okCount = preflight.length - problems.length;
 
   return (
     <div className={`rounded-xl border ${tone.border} ${tone.bg} select-none`}>
@@ -55,11 +69,11 @@ export const PreflightPanel: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setExpanded(v => !v)}
-          title={expanded ? 'Свернуть' : 'Показать все проверки'}
+          onClick={() => setCollapsed(!collapsed)}
+          title={collapsed ? 'Развернуть' : 'Свернуть до одной строки'}
           className="p-1 rounded-md text-slate-400 hover:text-slate-200 transition-colors"
         >
-          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${collapsed ? '' : 'rotate-180'}`} />
         </button>
       </div>
 
@@ -86,6 +100,17 @@ export const PreflightPanel: React.FC = () => {
               </div>
             );
           })}
+
+          {okCount > 0 && (
+            <button
+              onClick={() => setShowAll(v => !v)}
+              className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors pt-0.5"
+            >
+              {showAll
+                ? 'Скрыть пройденные проверки'
+                : `Показать пройденные проверки (${okCount})`}
+            </button>
+          )}
         </div>
       )}
     </div>

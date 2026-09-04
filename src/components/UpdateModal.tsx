@@ -14,7 +14,7 @@ export const UpdateModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn select-none">
       <div className={`w-full max-w-lg rounded-2xl border p-5 shadow-2xl space-y-4 ${
-        theme === 'dark' ? 'bg-[#0F172A] border-indigo-500/40 text-slate-100' : 'bg-white border-indigo-200 text-slate-900'
+        theme === 'dark' ? 'bg-slate-900 border-indigo-500/40 text-slate-100' : 'bg-white border-indigo-200 text-slate-900'
       }`}>
         {/* Header */}
         <div className="flex items-center justify-between border-b border-black/5 dark:border-white/5 pb-3">

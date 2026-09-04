@@ -32,8 +32,8 @@ export const Sidebar: React.FC = () => {
   return (
     <aside className={`w-64 border-r flex flex-col justify-between p-3 select-none transition-colors duration-200 ${
       theme === 'dark'
-        ? 'bg-[#0E1424]/95 border-white/5 text-slate-200'
-        : 'bg-slate-50/95 border-slate-200 text-slate-800'
+        ? 'bg-slate-900/85 border-white/5 text-slate-200'
+        : 'bg-slate-50/85 border-slate-200 text-slate-800'
     }`}>
       {/* Upper Navigation */}
       <div className="space-y-5">

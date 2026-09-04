@@ -2,6 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Значения палитр по умолчанию.
+ *
+ * Нужны до того, как отработает JS: без них первый кадр рисуется без
+ * цветов вообще, потому что все классы indigo-* и slate-* ссылаются на
+ * эти переменные. Дальше их перезаписывает src/lib/theme.ts.
+ */
+:root {
+  --accent-50: 238 242 255;
+  --accent-100: 224 231 255;
+  --accent-200: 199 210 254;
+  --accent-300: 165 180 252;
+  --accent-400: 129 140 248;
+  --accent-500: 99 102 241;
+  --accent-600: 79 70 229;
+  --accent-700: 67 56 202;
+  --accent-800: 55 48 163;
+  --accent-900: 49 46 129;
+  --accent-950: 30 27 75;
+
+  --surface-50: 248 250 252;
+  --surface-100: 241 245 249;
+  --surface-200: 226 232 240;
+  --surface-300: 203 213 225;
+  --surface-400: 148 163 184;
+  --surface-500: 100 116 139;
+  --surface-600: 71 85 105;
+  --surface-700: 51 65 85;
+  --surface-800: 30 41 59;
+  --surface-900: 15 23 42;
+  --surface-950: 2 6 23;
+
+  /* Своя картинка фоном. none — используется цвет из пресета. */
+  --app-bg-image: none;
+}
+
+/* Подложка окна: картинка поверх цвета темы, растянутая по размеру. */
+.app-shell {
+  background-image: var(--app-bg-image);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
 @layer base {
   * {
     border-color: rgba(255, 255, 255, 0.08);

@@ -209,7 +209,7 @@ export const CreatePresetModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fadeIn select-none">
       <div className={`w-full max-w-4xl max-h-[92vh] flex flex-col rounded-2xl border shadow-2xl overflow-hidden ${
-        theme === 'dark' ? 'bg-[#0F172A] border-indigo-500/40 text-slate-100' : 'bg-white border-indigo-200 text-slate-900'
+        theme === 'dark' ? 'bg-slate-900 border-indigo-500/40 text-slate-100' : 'bg-white border-indigo-200 text-slate-900'
       }`}>
         {/* Modal Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-black/10 dark:border-white/10 bg-black/5 dark:bg-black/20">

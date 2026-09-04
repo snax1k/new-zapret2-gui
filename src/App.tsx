@@ -36,9 +36,9 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className={`h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200 ${
+    <div className={`app-shell h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200 ${
       theme === 'dark'
-        ? 'bg-[#0B0F19] text-slate-100'
+        ? 'bg-slate-950 text-slate-100'
         : 'bg-slate-100 text-slate-900'
     }`}>
       {/* Windows 11 Styled Title Bar */}
@@ -51,7 +51,7 @@ export const App: React.FC = () => {
 
         {/* Dynamic Content Area */}
         <main className={`flex-1 overflow-hidden relative transition-colors duration-200 ${
-          theme === 'dark' ? 'bg-[#0D121F]/90' : 'bg-slate-50/80'
+          theme === 'dark' ? 'bg-slate-900/75' : 'bg-slate-50/70'
         }`}>
           {/* Subtle Ambient Background Gradients */}
           <div className="absolute top-0 right-1/4 w-96 h-96 bg-indigo-600/5 rounded-full blur-3xl pointer-events-none" />

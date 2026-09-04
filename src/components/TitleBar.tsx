@@ -1,10 +1,38 @@
 import React, { useState } from 'react';
-import { Shield, Minus, Square, Copy, X, Cpu, Sun, Moon, Lock } from 'lucide-react';
+import { Shield, Minus, Square, Copy, X, Cpu, Sun, Moon, Flame, Lock } from 'lucide-react';
 import { useApp, APP_VERSION } from '../context/AppContext';
 
 export const TitleBar: React.FC = () => {
-  const { status, engineMode, theme, toggleTheme, closeBehavior, setShowTrayToast, addLog } = useApp();
+  const {
+    status, engineMode, theme, setTheme, accent, setAccent,
+    closeBehavior, setShowTrayToast, addLog
+  } = useApp();
   const [isMaximized, setIsMaximized] = useState(false);
+
+  /**
+   * Три схемы одной кнопкой каждая.
+   *
+   * Раньше здесь был переключатель светлая/тёмная, и до красной схемы
+   * приходилось идти в настройки. Полный набор цветов и фонов остаётся
+   * там же — тут только то, что переключают на ходу.
+   */
+  const schemes: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; color: string; active: boolean }[] = [
+    { id: 'light', label: 'Светлая тема', icon: Sun, color: 'text-amber-400', active: theme === 'light' },
+    { id: 'dark', label: 'Тёмная тема', icon: Moon, color: 'text-indigo-400', active: theme === 'dark' && accent !== 'red' },
+    { id: 'dark-red', label: 'Тёмная с красным акцентом', icon: Flame, color: 'text-red-400', active: theme === 'dark' && accent === 'red' }
+  ];
+
+  const applyScheme = (id: string) => {
+    if (id === 'light') {
+      setTheme('light');
+    } else if (id === 'dark') {
+      setTheme('dark');
+      if (accent === 'red') setAccent('indigo');
+    } else {
+      setTheme('dark');
+      setAccent('red');
+    }
+  };
 
   const getEngineLabel = () => {
     switch (engineMode) {
@@ -70,7 +98,7 @@ export const TitleBar: React.FC = () => {
       }}
       className={`h-10 w-full flex items-center justify-between px-3 border-b select-none z-50 transition-colors duration-200 cursor-default ${
         theme === 'dark'
-          ? 'bg-[#090D16]/95 border-white/5 text-slate-200'
+          ? 'bg-slate-950/95 border-white/5 text-slate-200'
           : 'bg-slate-100/95 border-slate-300/80 text-slate-800'
       }`}
     >
@@ -109,18 +137,26 @@ export const TitleBar: React.FC = () => {
 
       {/* Right Controls: Theme switch + Window Control Buttons */}
       <div className="flex items-center gap-1">
-        {/* Light / Dark Mode Toggle */}
-        <button
-          onClick={toggleTheme}
-          title={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'}
-          className="p-1.5 rounded-md text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors mr-1"
-        >
-          {theme === 'dark' ? (
-            <Sun className="w-3.5 h-3.5 text-amber-400" />
-          ) : (
-            <Moon className="w-3.5 h-3.5 text-indigo-600" />
-          )}
-        </button>
+        {/* Быстрое переключение схемы */}
+        <div className="flex items-center gap-0.5 mr-1.5 p-0.5 rounded-lg bg-black/5 dark:bg-white/5">
+          {schemes.map(s => {
+            const Icon = s.icon;
+            return (
+              <button
+                key={s.id}
+                onClick={() => applyScheme(s.id)}
+                title={s.label}
+                className={`p-1.5 rounded-md transition-colors ${
+                  s.active
+                    ? 'bg-white dark:bg-white/15 shadow-xs'
+                    : 'hover:bg-black/5 dark:hover:bg-white/10'
+                }`}
+              >
+                <Icon className={`w-3.5 h-3.5 ${s.active ? s.color : 'text-slate-400 dark:text-slate-500'}`} />
+              </button>
+            );
+          })}
+        </div>
 
         {/* Windows Window Controls */}
         <div className="flex items-center">

@@ -18,7 +18,10 @@ import {
 import { useApp } from '../context/AppContext';
 
 export const DiagnosticsView: React.FC = () => {
-  const { diagnostics, runDiagnostics, isDiagnosticsRunning, setActiveTab, theme } = useApp();
+  const {
+    diagnostics, runDiagnostics, isDiagnosticsRunning, setActiveTab, theme,
+    status, preflight
+  } = useApp();
   const [expandedId, setExpandedId] = useState<string>('yt-web');
 
   // Итог считаем по реальным статусам. Раньше здесь висела зашитая надпись
@@ -27,6 +30,13 @@ export const DiagnosticsView: React.FC = () => {
   const okCount = diagnostics.filter(d => d.status === 'success').length;
   const failCount = diagnostics.filter(d => d.status === 'blocked' || d.status === 'error').length;
   const neverRun = okCount + failCount === 0 && !isDiagnosticsRunning;
+
+  // Состояние обхода нужно, чтобы не советовать «проверьте, включён ли он»
+  // человеку, у которого он включён. А системный прокси объясняет самый
+  // частый и самый сбивающий с толку случай: сайты в браузере открываются,
+  // а проверка не проходит. Браузер идёт через прокси, проверка — напрямую.
+  const bypassOn = status === 'connected';
+  const proxyOn = preflight.some(p => p.id === 'proxy' && p.level !== 'ok');
 
   return (
     <div className="h-full flex flex-col p-6 space-y-5 overflow-y-auto select-none">
@@ -100,9 +110,21 @@ export const DiagnosticsView: React.FC = () => {
               ) : failCount === 0 ? (
                 <>Отвечают все проверенные цели: <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>. Обход справляется.</>
               ) : okCount === 0 ? (
-                <>Не отвечает ни одна цель из {failCount}. Проверьте, включён ли обход,
-                и загляните в «Проверку окружения» на главной — системный прокси или
-                VPN уводят трафик мимо ядра.</>
+                proxyOn ? (
+                  <>Не ответила ни одна цель из {failCount}, но по этому нельзя судить об
+                  обходе{bypassOn ? ' (он включён)' : ''}. Включён системный прокси:
+                  браузер ходит через него, а проверка — напрямую, мимо него и через ядро.
+                  Поэтому сайты могут открываться, пока проверка их не видит. Чтобы
+                  результат что-то значил, прокси нужно временно выключить.</>
+                ) : bypassOn ? (
+                  <>Обход включён, но не ответила ни одна цель из {failCount}. Разверните
+                  любую из них: если рукопожатие с посторонним именем проходит, а с
+                  настоящим нет — рвут по имени сайта, и стоит подобрать другую стратегию
+                  в «Пресетах». Загляните и в «Проверку окружения» на главной.</>
+                ) : (
+                  <>Обход выключен, и ни одна цель из {failCount} не отвечает. Включите
+                  его на главной и повторите проверку — иначе сравнивать не с чем.</>
+                )
               ) : (
                 <>Отвечают <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>,
                 не отвечают <strong className="text-rose-600 dark:text-rose-300">{failCount}</strong>.

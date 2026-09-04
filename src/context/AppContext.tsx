@@ -24,6 +24,7 @@ import {
   findYoutubeStrategy,
   YOUTUBE_STRATEGIES
 } from '../lib/zapretCommand';
+import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
 
 // Домены, к которым применяется обход. Хостлист-файл list-general.txt лежит
 // рядом с winws.exe (рабочий каталог процесса), поэтому путь указывается
@@ -32,7 +33,12 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.1.3';
+export const APP_VERSION = '0.1.4';
+
+const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
+const THEME_BG_KEY = 'zapret2_theme_bg_v1';
+const THEME_IMAGE_KEY = 'zapret2_theme_image_v1';
+const THEME_TINT_KEY = 'zapret2_theme_tint_v1';
 
 /** Когда в последний раз ходили на GitHub за релизом. ISO-строка. */
 const UPDATE_CHECK_KEY = 'zapret2_update_checked_v1';
@@ -238,6 +244,16 @@ interface AppContextType {
   toggleStatus: () => void;
   theme: ThemeMode;
   toggleTheme: () => void;
+  setTheme: (m: ThemeMode) => void;
+  accent: string;
+  setAccent: (id: string) => void;
+  background: string;
+  setBackground: (id: string) => void;
+  /** Своя картинка фоном (data-URL) либо пустая строка. */
+  customBackground: string;
+  /** Ставит картинку фоном; тон интерфейса подстраивается под неё. */
+  setCustomBackground: (file: File) => Promise<void>;
+  clearCustomBackground: () => void;
   closeBehavior: CloseBehavior;
   setCloseBehavior: (b: CloseBehavior) => void;
   showTrayToast: boolean;
@@ -318,6 +334,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [theme, setTheme] = useState<ThemeMode>(
     () => (localStorage.getItem('zapret2_theme_v5') as ThemeMode) || 'dark'
   );
+  const [accent, setAccentState] = useState<string>(
+    () => localStorage.getItem(THEME_ACCENT_KEY) || 'indigo'
+  );
+  const [background, setBackgroundState] = useState<string>(
+    () => localStorage.getItem(THEME_BG_KEY) || 'slate'
+  );
+  const [customBackground, setCustomBackgroundState] = useState<string>(
+    () => localStorage.getItem(THEME_IMAGE_KEY) || ''
+  );
+  const [customTint, setCustomTint] = useState<{ hue: number; sat: number }>(() => {
+    try {
+      const raw = localStorage.getItem(THEME_TINT_KEY);
+      if (raw) return JSON.parse(raw);
+    } catch { }
+    return { hue: 217, sat: 1 };
+  });
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(
     () => (localStorage.getItem('zapret2_close_v5') as CloseBehavior) || 'minimize_to_tray'
   );
@@ -645,12 +677,72 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Класс на <html> и сохранённый выбор держим в одном месте, иначе тема
-  // сбрасывалась при перезапуске и рассинхронизировалась с разметкой.
+  const setAccent = (id: string) => {
+    localStorage.setItem(THEME_ACCENT_KEY, id);
+    setAccentState(id);
+  };
+
+  // Смена фона тянет за собой акцент: у каждого фона есть тот, что к нему
+  // подходит. Иначе «Багрянец» с индиговыми кнопками выглядит случайностью.
+  const setBackground = (id: string) => {
+    localStorage.setItem(THEME_BG_KEY, id);
+    setBackgroundState(id);
+    const def = getBackground(id);
+    localStorage.setItem(THEME_ACCENT_KEY, def.accent);
+    setAccentState(def.accent);
+    // Пресет и картинка — взаимоисключающие: выбрали пресет, картинка уходит.
+    if (customBackground) {
+      localStorage.removeItem(THEME_IMAGE_KEY);
+      setCustomBackgroundState('');
+    }
+  };
+
+  const setCustomBackground = async (file: File) => {
+    try {
+      const dataUrl = await shrinkImage(file);
+      const tint = await averageHueOfImage(dataUrl);
+      try {
+        localStorage.setItem(THEME_IMAGE_KEY, dataUrl);
+        localStorage.setItem(THEME_TINT_KEY, JSON.stringify(tint));
+      } catch {
+        // Картинка может не влезть в localStorage — она там не одна.
+        addLog('warn', 'Фон применён, но не сохранится до следующего запуска: не хватило места в хранилище.', 'Theme');
+      }
+      setCustomBackgroundState(dataUrl);
+      setCustomTint(tint);
+
+      // Акцент подтягиваем к тону картинки — иначе оранжевый фон с изумрудными
+      // кнопками выглядит так, будто фон подставили случайно.
+      const suggested = nearestAccent(tint.hue);
+      localStorage.setItem(THEME_ACCENT_KEY, suggested);
+      setAccentState(suggested);
+
+      addLog('success', `Фон заменён на изображение, тон интерфейса подобран по нему (${tint.hue}°).`, 'Theme');
+    } catch (e: any) {
+      addLog('error', 'Не удалось поставить фон: ' + (e?.message || e), 'Theme');
+    }
+  };
+
+  const clearCustomBackground = () => {
+    localStorage.removeItem(THEME_IMAGE_KEY);
+    localStorage.removeItem(THEME_TINT_KEY);
+    setCustomBackgroundState('');
+  };
+
+  // Одно место, где тема превращается в CSS-переменные. Класс на <html> и
+  // сохранённый выбор держим здесь же, иначе тема сбрасывалась при
+  // перезапуске и рассинхронизировалась с разметкой.
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
+    applyTheme({
+      mode: theme,
+      accent,
+      background,
+      customImage: customBackground,
+      customHue: customTint.hue,
+      customSat: customTint.sat
+    });
     localStorage.setItem('zapret2_theme_v5', theme);
-  }, [theme]);
+  }, [theme, accent, background, customBackground, customTint]);
 
   const addLog = (level: LogEntry['level'], message: string, source: string = 'Core') => {
     const now = new Date();
@@ -1136,6 +1228,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         toggleStatus,
         theme,
         toggleTheme,
+        setTheme,
+        accent,
+        setAccent,
+        background,
+        setBackground,
+        customBackground,
+        setCustomBackground,
+        clearCustomBackground,
         closeBehavior,
         setCloseBehavior,
         showTrayToast,

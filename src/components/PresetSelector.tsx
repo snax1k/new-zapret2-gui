@@ -74,7 +74,7 @@ export const PresetSelector: React.FC = () => {
 
           <div className={`absolute left-0 right-0 top-full mt-2 z-40 p-1.5 rounded-2xl border shadow-2xl space-y-1 max-h-72 overflow-y-auto backdrop-blur-xl ${
             theme === 'dark'
-              ? 'bg-[#0F172A] border-indigo-500/30 shadow-black/80'
+              ? 'bg-slate-900 border-indigo-500/30 shadow-black/80'
               : 'bg-white border-indigo-200 shadow-slate-400/30'
           }`}>
             <div className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between border-b border-black/5 dark:border-white/5 pb-1.5 mb-1">

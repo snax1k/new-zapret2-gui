@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Settings,
   Shield,
@@ -16,9 +16,13 @@ import {
   FolderOpen,
   BellRing,
   Download,
-  HardDrive
+  HardDrive,
+  Palette,
+  Flame,
+  Image as ImageIcon
 } from 'lucide-react';
 import { useApp, BUNDLED_CORE_VERSION } from '../context/AppContext';
+import { ACCENTS, BACKGROUNDS, buildSurfaceRamp } from '../lib/theme';
 import { CloseBehavior } from '../types';
 
 /** «2026-09-05, 14:31» вместо ISO-строки, которую читать невозможно. */
@@ -43,6 +47,14 @@ export const SettingsView: React.FC = () => {
     autoCheckUpdates,
     setAutoCheckUpdates,
     setIsUpdateModalOpen,
+    setTheme,
+    accent,
+    setAccent,
+    background,
+    setBackground,
+    customBackground,
+    setCustomBackground,
+    clearCustomBackground,
     closeBehavior,
     setCloseBehavior,
     killZombieWinDivert,
@@ -50,6 +62,29 @@ export const SettingsView: React.FC = () => {
     isWatchdogClean
   } = useApp();
 
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [bgBusy, setBgBusy] = useState(false);
+
+  const pickImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files[0];
+    // Значение сбрасываем сразу: иначе повторный выбор того же файла не
+    // вызовет onChange и это будет выглядеть поломкой.
+    e.target.value = '';
+    if (!file) return;
+    setBgBusy(true);
+    try {
+      await setCustomBackground(file);
+    } finally {
+      setBgBusy(false);
+    }
+  };
+
+  /** Цвет плитки фона — та же ступень, которой закрашено окно. */
+  const swatchOf = (hue: number, sat: number) => {
+    const r = buildSurfaceRamp(hue, sat);
+    const c = r[theme === 'dark' ? 900 : 200];
+    return `rgb(${c[0]} ${c[1]} ${c[2]})`;
+  };
 
   return (
     <div className="h-full flex flex-col p-6 space-y-5 overflow-y-auto select-none">
@@ -65,6 +100,158 @@ export const SettingsView: React.FC = () => {
       </div>
 
       <div className="space-y-4">
+        {/* 0. Оформление */}
+        <div className={`p-4 rounded-xl border space-y-3.5 ${
+          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
+        }`}>
+          <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+            <Palette className="w-4 h-4 text-indigo-500" />
+            Оформление: схема, акцент и фон
+          </span>
+
+          {/* Схема */}
+          <div>
+            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+              Схема
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'light', label: 'Светлая', icon: Sun, on: theme === 'light' },
+                { id: 'dark', label: 'Тёмная', icon: Moon, on: theme === 'dark' && accent !== 'red' },
+                { id: 'dark-red', label: 'Тёмная красная', icon: Flame, on: theme === 'dark' && accent === 'red' }
+              ].map(s => {
+                const Icon = s.icon;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => {
+                      if (s.id === 'light') setTheme('light');
+                      else if (s.id === 'dark') { setTheme('dark'); if (accent === 'red') setAccent('indigo'); }
+                      else { setTheme('dark'); setAccent('red'); }
+                    }}
+                    className={`p-2.5 rounded-xl border text-[11px] font-bold flex items-center gap-2 transition-all ${
+                      s.on
+                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-900 dark:text-indigo-200'
+                        : 'bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{s.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Акцент */}
+          <div>
+            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+              Цвет акцента
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {ACCENTS.map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => setAccent(a.id)}
+                  title={a.label}
+                  className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 ${
+                    accent === a.id
+                      ? 'border-slate-900 dark:border-white scale-110'
+                      : 'border-transparent'
+                  }`}
+                  style={{ background: a.swatch }}
+                />
+              ))}
+              <span className="text-[10px] text-slate-500 dark:text-slate-400 ml-1">
+                Кнопки, ссылки и выделения по всему приложению
+              </span>
+            </div>
+          </div>
+
+          {/* Фон */}
+          <div>
+            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
+              Фон
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {BACKGROUNDS.map(b => (
+                <button
+                  key={b.id}
+                  onClick={() => setBackground(b.id)}
+                  className={`p-2 rounded-xl border text-[10px] font-bold flex items-center gap-2 transition-all ${
+                    background === b.id && !customBackground
+                      ? 'border-indigo-500 text-slate-900 dark:text-slate-100'
+                      : 'border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <span
+                    className="w-5 h-5 rounded-md border border-black/10 dark:border-white/10 shrink-0"
+                    style={{ background: swatchOf(b.hue, b.sat) }}
+                  />
+                  <span className="truncate">{b.label}</span>
+                </button>
+              ))}
+            </div>
+
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2">
+              Фон задаёт тон всем панелям и тексту: светлота ступеней не меняется,
+              поэтому контраст остаётся прежним при любом выборе. Вместе с фоном
+              подставляется подходящий ему акцент — его можно поменять выше.
+            </p>
+          </div>
+
+          {/* Своя картинка */}
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5">
+            <div className="min-w-0 flex items-center gap-3">
+              {customBackground ? (
+                <img
+                  src={customBackground}
+                  alt=""
+                  className="w-12 h-9 rounded-md object-cover border border-black/10 dark:border-white/10 shrink-0"
+                />
+              ) : (
+                <div className="w-12 h-9 rounded-md bg-black/10 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center shrink-0">
+                  <ImageIcon className="w-4 h-4 text-slate-400" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                  {customBackground ? 'Фоном стоит своё изображение' : 'Своё изображение фоном'}
+                </div>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                  Тон интерфейса подбирается по среднему цвету картинки. Поверх неё
+                  кладётся затемняющий слой — без него текст поверх снимка нечитаем.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {customBackground && (
+                <button
+                  onClick={clearCustomBackground}
+                  className="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[11px] font-bold text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10 transition-colors"
+                >
+                  Убрать
+                </button>
+              )}
+              <button
+                onClick={() => fileInput.current && fileInput.current.click()}
+                disabled={bgBusy}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-[11px] font-bold shadow-xs transition-colors"
+              >
+                {bgBusy ? 'Обработка...' : 'Выбрать...'}
+              </button>
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                onChange={pickImage}
+                className="hidden"
+              />
+            </div>
+          </div>
+        </div>
+
         {/* 1. WinDivert Zombie Process Watchdog & Cleanup */}
         <div className={`p-4 rounded-xl border space-y-3 ${
           theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
