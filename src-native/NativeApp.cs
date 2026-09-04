@@ -1229,7 +1229,40 @@ namespace Zapret2App
                     }
 
                     SendUpdateProgress(92, "Проверка контрольной суммы...");
-                    string actual = Sha256OfFile(tmp);
+
+                    // Антивирус может забрать скачанный файл прямо здесь.
+                    // Сборка неподписанная, распаковывает из ресурсов драйвер
+                    // и запускает его от администратора — под эвристику
+                    // Defender (Wacatac.H!ml и подобные) она подходит хорошо.
+                    // Без отдельной проверки человек увидел бы невнятную
+                    // ошибку доступа к файлу и не понял бы, при чём тут он.
+                    string actual;
+                    try
+                    {
+                        actual = Sha256OfFile(tmp);
+                    }
+                    catch (Exception hashEx)
+                    {
+                        int hr = Marshal.GetHRForException(hashEx);
+                        bool virusVerdict = hr == unchecked((int)0x800700E1)   // ERROR_VIRUS_INFECTED
+                                         || hr == unchecked((int)0x800700E2)   // ERROR_VIRUS_DELETED
+                                         || !File.Exists(tmp);
+                        if (virusVerdict)
+                        {
+                            SendUpdateError(
+                                "Скачанную сборку заблокировал антивирус, установка отменена. " +
+                                "Это ложное срабатывание эвристики: приложение не подписано и " +
+                                "запускает драйвер WinDivert от администратора. Скачайте сборку " +
+                                "вручную со страницы релиза и при необходимости добавьте её в " +
+                                "исключения антивируса.");
+                        }
+                        else
+                        {
+                            SendUpdateError("Не удалось прочитать скачанный файл: " + hashEx.Message);
+                        }
+                        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { }
+                        return;
+                    }
 
                     if (expectedSha.Length == 64)
                     {

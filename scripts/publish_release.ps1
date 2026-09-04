@@ -17,7 +17,11 @@
 param(
     [string]$Version = "",
     [string]$Repo = "snax1k/new-zapret2-gui",
-    [switch]$Draft
+    [switch]$Draft,
+    # Перезалить файлы, которые уже лежат в релизе. Нужно, когда сборку
+    # пришлось пересобрать под тем же номером версии — например, её забраковал
+    # антивирус по эвристике, и новый двоичный файл проходит.
+    [switch]$ReplaceAssets
 )
 
 $ErrorActionPreference = "Stop"
@@ -171,8 +175,23 @@ function Send-Asset([string]$path, [string]$contentType) {
     $name = Split-Path $path -Leaf
 
     if ($already -contains $name) {
-        Write-Host "== $name уже в релизе, пропускаем" -ForegroundColor DarkGray
-        return
+        if (-not $ReplaceAssets) {
+            Write-Host "== $name уже в релизе, пропускаем" -ForegroundColor DarkGray
+            return
+        }
+        # Заменить ассет на месте нельзя: GitHub на повторное имя отвечает 422,
+        # поэтому сначала удаляем старый.
+        $old = $assets | Where-Object { $_.name -eq $name }
+        foreach ($a in $old) {
+            Write-Host "== Удаление прежнего $name (id $($a.id))..." -ForegroundColor Yellow
+            try {
+                Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/assets/$($a.id)" `
+                    -Method Delete -Headers $headers | Out-Null
+            } catch {
+                Write-Host "Не удалось удалить прежний ${name}: $($_.Exception.Message)" -ForegroundColor Red
+                exit 1
+            }
+        }
     }
 
     $uri = ($release.upload_url -replace '\{\?name,label\}', '') + "?name=$name"
