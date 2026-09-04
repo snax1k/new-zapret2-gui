@@ -123,13 +123,17 @@ try {
     $existing = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/tags/$tag" -Headers $headers
 } catch { }
 
+# Релиз мог остаться с прошлого запуска без ассетов: заливка exe падает,
+# если файл занят — например, приложение этой же версии только что запустили.
+# Удалять такой релиз незачем, надо долить недостающее.
+$release = $null
 if ($existing) {
-    Write-Host "Релиз $tag уже существует (id $($existing.id))." -ForegroundColor Yellow
-    Write-Host "Удалите его на GitHub или поднимите версию." -ForegroundColor Yellow
-    exit 1
+    Write-Host "Релиз $tag уже существует (id $($existing.id)) — дозаливаем файлы." -ForegroundColor Yellow
+    $release = $existing
 }
 
 # --- 7. Создаём релиз -------------------------------------------------
+if (-not $release) {
 Write-Host "== Создание релиза..." -ForegroundColor Cyan
 $payload = @{
     tag_name = $tag
@@ -153,15 +157,52 @@ try {
 }
 
 Write-Host "   id $($release.id)" -ForegroundColor DarkGray
+}
 
 # --- 8. Заливаем файлы ------------------------------------------------
+# Что уже лежит в релизе: повторная заливка того же имени вернула бы 422.
+$already = @()
+try {
+    $assets = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/$($release.id)/assets" -Headers $headers
+    foreach ($a in $assets) { $already += $a.name }
+} catch { }
+
 function Send-Asset([string]$path, [string]$contentType) {
     $name = Split-Path $path -Leaf
+
+    if ($already -contains $name) {
+        Write-Host "== $name уже в релизе, пропускаем" -ForegroundColor DarkGray
+        return
+    }
+
     $uri = ($release.upload_url -replace '\{\?name,label\}', '') + "?name=$name"
     Write-Host "== Загрузка $name..." -ForegroundColor Cyan
-    Invoke-RestMethod -Uri $uri -Method Post -Headers $headers `
-        -InFile $path -ContentType $contentType | Out-Null
-    Write-Host "   готово" -ForegroundColor DarkGray
+
+    # Заливаем всегда с копии во временном каталоге.
+    #
+    # Invoke-RestMethod -InFile открывает файл без разрешения на совместное
+    # чтение, поэтому запущенная сборка этой же версии (обычное дело: её
+    # только что поставили и проверяют) намертво блокирует публикацию.
+    # Copy-Item читать запущенный exe умеет.
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ("zapret2-upload-" + [Guid]::NewGuid().ToString("N") + "-" + $name)
+    try {
+        Copy-Item -LiteralPath $path -Destination $temp -Force
+    } catch {
+        Write-Host "Не удалось скопировать ${name} для загрузки: $($_.Exception.Message)" -ForegroundColor Red
+        exit 1
+    }
+
+    try {
+        Invoke-RestMethod -Uri $uri -Method Post -Headers $headers `
+            -InFile $temp -ContentType $contentType | Out-Null
+        Write-Host "   готово" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "Не удалось залить ${name}: $($_.Exception.Message)" -ForegroundColor Red
+        Remove-Item $temp -Force -ErrorAction SilentlyContinue
+        exit 1
+    }
+
+    Remove-Item $temp -Force -ErrorAction SilentlyContinue
 }
 
 Send-Asset $exe "application/vnd.microsoft.portable-executable"
