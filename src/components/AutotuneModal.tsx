@@ -3,10 +3,7 @@ import { Wand2, X, Loader2, CheckCircle2, XCircle, Circle, Play, Square } from '
 import { useApp } from '../context/AppContext';
 import { findYoutubeStrategy } from '../lib/zapretCommand';
 
-interface Props {
-  open: boolean;
-  onClose: () => void;
-}
+
 
 /**
  * Автоподбор стратегии YouTube.
@@ -20,13 +17,16 @@ interface Props {
  * используют), а имена резолвятся один раз до перебора — иначе DNS стал бы
  * ещё одной переменной и варианты нельзя было бы сравнивать между собой.
  */
-export const AutotuneModal: React.FC<Props> = ({ open, onClose }) => {
+export const AutotuneModal: React.FC = () => {
   const {
     autotuneRows, isAutotuneRunning, startAutotune, cancelAutotune,
-    setYoutubeStrategy, quickToggles, theme
+    setYoutubeStrategy, quickToggles,
+    isAutotuneModalOpen, setIsAutotuneModalOpen, theme
   } = useApp();
 
-  if (!open) return null;
+  if (!isAutotuneModalOpen) return null;
+
+  const onClose = () => setIsAutotuneModalOpen(false);
 
   const finished = autotuneRows.filter(r => r.phase === 'done');
   const winners = finished.filter(r => r.ok).sort((a, b) => a.ms - b.ms);

@@ -159,7 +159,7 @@ export const SettingsView: React.FC = () => {
 
           <div className="p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-500/20 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-600 dark:text-slate-400">Версия GUI: <strong>v0.1.0-portable</strong></span>
+              <span className="text-slate-600 dark:text-slate-400">Версия GUI: <strong>v0.1.1-portable</strong></span>
 
               {updateInfo.hasUpdate ? (
                 <span className="text-indigo-600 dark:text-indigo-300 font-semibold flex items-center gap-1">

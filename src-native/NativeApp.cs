@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.1.0";
+        public const string AppVersion = "0.1.1";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;

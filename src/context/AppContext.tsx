@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import {
   AppStatus,
   TabType,
@@ -234,6 +234,9 @@ interface AppContextType {
   isAutotuneRunning: boolean;
   startAutotune: () => void;
   cancelAutotune: () => void;
+  /** Модалка автоподбора открывается и с главной, и из «Пресетов». */
+  isAutotuneModalOpen: boolean;
+  setIsAutotuneModalOpen: (open: boolean) => void;
   logs: LogEntry[];
   addLog: (level: LogEntry['level'], message: string, source?: string) => void;
   clearLogs: () => void;
@@ -350,7 +353,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [logs, setLogs] = useState<LogEntry[]>(() => {
     const t = new Date().toTimeString().split(' ')[0];
     return [
-      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.0 запущен', source: 'Core' },
+      { id: '1', timestamp: t, level: 'info', message: 'Zapret2 Control Center v0.1.1 запущен', source: 'Core' },
       { id: '2', timestamp: t, level: 'info', message: 'Ядро zapret v72.13 (winws.exe, WinDivert 64-bit) готово', source: 'WinWS' }
     ];
   });
@@ -370,6 +373,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [preflight, setPreflight] = useState<PreflightItem[]>([]);
   const [autotuneRows, setAutotuneRows] = useState<AutotuneRow[]>([]);
   const [isAutotuneRunning, setIsAutotuneRunning] = useState(false);
+  const [isAutotuneModalOpen, setIsAutotuneModalOpen] = useState(false);
 
   // Handle IPC Messages from Native C# Host
   useEffect(() => {
@@ -789,6 +793,31 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return include.join('\n') + '#EXCLUDE#' + exclude.join('\n');
   };
 
+  // Живая перезагрузка списков.
+  //
+  // Ядро zapret перечитывает хостлисты само, по времени изменения файла
+  // (LoadHostList в hostlist.c). Раньше приложение писало list-user.txt
+  // только перед запуском ядра, и в интерфейсе честно висело «изменения
+  // вступят в силу при следующем включении» — ограничение было наше, не ядра.
+  // Теперь файл переписывается при каждом изменении списка, и ядро
+  // подхватывает правки на лету, без перезапуска.
+  const listsWritten = useRef(false);
+  useEffect(() => {
+    // Первый проход пропускаем: при старте ядра списки пишутся и так,
+    // а на монтировании писать нечего.
+    if (!listsWritten.current) {
+      listsWritten.current = true;
+      return;
+    }
+    if (status !== 'connected' || !window.chrome?.webview) return;
+
+    const t = setTimeout(() => {
+      window.chrome!.webview!.postMessage('save_lists:' + serializeLists());
+      addLog('info', 'Списки записаны, ядро перечитает их само.', 'Hostlist');
+    }, 400);
+    return () => clearTimeout(t);
+  }, [hostlists, status]);
+
   const exportHostlists = () => {
     const body = hostlists.map(h => (h.category === 'exclude' ? '# исключение: ' : '') + h.domain).join('\n');
     if (!body) {
@@ -947,6 +976,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         isAutotuneRunning,
         startAutotune,
         cancelAutotune,
+        isAutotuneModalOpen,
+        setIsAutotuneModalOpen,
         logs,
         addLog,
         clearLogs,

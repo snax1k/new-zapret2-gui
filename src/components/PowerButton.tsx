@@ -1,10 +1,17 @@
 import React from 'react';
-import { Power, ShieldCheck, ShieldAlert, Loader2, Sparkles } from 'lucide-react';
+import { Power, ShieldCheck, ShieldAlert, Loader2, Sparkles, AlertTriangle } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useApp } from '../context/AppContext';
 
+/**
+ * Через сколько секунд работы отсутствие вмешательств считается подозрительным.
+ * Сразу после запуска счётчик закономерно нулевой: браузер ещё не открыл ни
+ * одного нового соединения, а старые ядро не трогает.
+ */
+const IDLE_ALERT_AFTER_SEC = 60;
+
 export const PowerButton: React.FC = () => {
-  const { status, toggleStatus, stats, theme } = useApp();
+  const { status, toggleStatus, stats, quickToggles, setActiveTab, theme } = useApp();
 
   const formatUptime = (totalSeconds: number) => {
     const hrs = Math.floor(totalSeconds / 3600);
@@ -15,6 +22,16 @@ export const PowerButton: React.FC = () => {
 
   const isConnected = status === 'connected';
   const isConnecting = status === 'connecting';
+
+  // Ядро живо, но за минуту не вмешалось ни разу. Почти всегда это значит,
+  // что до winws просто не доходит трафик: системный прокси уводит HTTP(S)
+  // в loopback, поднят VPN, или списки не покрывают то, что открывают.
+  // Без --debug ядро таких строк не печатает, и судить не о чем.
+  const idle =
+    isConnected &&
+    quickToggles.verboseLog &&
+    stats.desyncCount === 0 &&
+    stats.uptimeSeconds >= IDLE_ALERT_AFTER_SEC;
 
   return (
     <div className="flex flex-col items-center justify-center select-none">
@@ -86,7 +103,12 @@ export const PowerButton: React.FC = () => {
       {/* Status Details under the button */}
       <div className="mt-5 text-center space-y-1">
         <div className="flex items-center justify-center gap-2">
-          {isConnected ? (
+          {idle ? (
+            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-bold">
+              <AlertTriangle className="w-4 h-4" />
+              <span>ЯДРО ЗАПУЩЕНО, ТРАФИК НЕ ОБРАБАТЫВАЕТСЯ</span>
+            </div>
+          ) : isConnected ? (
             <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
               <ShieldCheck className="w-4 h-4" />
               <span>ЗАЩИТА И ОБХОД АКТИВНЫ</span>
@@ -104,9 +126,19 @@ export const PowerButton: React.FC = () => {
           )}
         </div>
 
+        {idle && (
+          <button
+            onClick={() => setActiveTab('dashboard')}
+            className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline pt-0.5"
+          >
+            За {Math.floor(stats.uptimeSeconds / 60)} мин ни одного вмешательства —
+            смотрите проверку окружения выше
+          </button>
+        )}
+
         {isConnected ? (
           <div className="flex items-center justify-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-mono pt-1">
-            <span>Время: <strong className="text-emerald-600 dark:text-emerald-300">{formatUptime(stats.uptimeSeconds)}</strong></span>
+            <span>Время: <strong className={idle ? 'text-amber-600 dark:text-amber-300' : 'text-emerald-600 dark:text-emerald-300'}>{formatUptime(stats.uptimeSeconds)}</strong></span>
             <span>•</span>
             <span>winws: <strong className="text-slate-800 dark:text-slate-200">PID {stats.pid || '—'}</strong></span>
           </div>

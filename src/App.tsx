@@ -3,6 +3,7 @@ import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { UpdateModal } from './components/UpdateModal';
 import { CreatePresetModal } from './components/CreatePresetModal';
+import { AutotuneModal } from './components/AutotuneModal';
 import { DashboardView } from './views/DashboardView';
 import { PresetsView } from './views/PresetsView';
 import { HostlistsView } from './views/HostlistsView';
@@ -68,6 +69,9 @@ export const App: React.FC = () => {
 
       {/* Create Custom Preset Modal */}
       <CreatePresetModal />
+
+      {/* Автоподбор стратегии — открывается и с главной, и из «Пресетов» */}
+      <AutotuneModal />
 
       {/* Tray Toast Notification */}
       {showTrayToast && (

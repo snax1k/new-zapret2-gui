@@ -17,6 +17,7 @@ import {
   Upload
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { YoutubeStrategyPicker } from '../components/YoutubeStrategyPicker';
 import { Preset, PresetArgs } from '../types';
 import { buildPresetCommand, describeProfiles, describeGlobalFlags } from '../lib/zapretCommand';
 import { BUILTIN_PRESET_IDS } from '../context/AppContext';
@@ -168,6 +169,14 @@ export const PresetsView: React.FC = () => {
             <span>Создать пресет</span>
           </button>
         </div>
+      </div>
+
+      {/* Стратегия YouTube — настройка активного пресета, а не быстрый
+          переключатель, поэтому живёт здесь, а не на главной. */}
+      <div className={`p-3.5 rounded-xl border ${
+        theme === 'dark' ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200/80 shadow-xs'
+      }`}>
+        <YoutubeStrategyPicker />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">
