@@ -21,7 +21,11 @@ param(
     # Перезалить файлы, которые уже лежат в релизе. Нужно, когда сборку
     # пришлось пересобрать под тем же номером версии — например, её забраковал
     # антивирус по эвристике, и новый двоичный файл проходит.
-    [switch]$ReplaceAssets
+    [switch]$ReplaceAssets,
+    # Обновить описание уже опубликованного релиза из README.txt, ничего не
+    # перезаливая. Пригождается, когда в описание надо дописать то, что
+    # выяснилось после публикации.
+    [switch]$UpdateNotes
 )
 
 $ErrorActionPreference = "Stop"
@@ -134,6 +138,21 @@ $release = $null
 if ($existing) {
     Write-Host "Релиз $tag уже существует (id $($existing.id)) — дозаливаем файлы." -ForegroundColor Yellow
     $release = $existing
+
+    if ($UpdateNotes) {
+        Write-Host "== Обновление описания релиза..." -ForegroundColor Cyan
+        $patchBody = @{ body = $body } | ConvertTo-Json -Depth 3
+        try {
+            Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/$($release.id)" `
+                -Method Patch -Headers $headers -Body ([Text.Encoding]::UTF8.GetBytes($patchBody)) `
+                -ContentType "application/json" | Out-Null
+            Write-Host "   описание обновлено" -ForegroundColor DarkGray
+        } catch {
+            # Как и при создании: исключение печатаем без заголовков, там токен.
+            Write-Host "Не удалось обновить описание: $($_.Exception.Message)" -ForegroundColor Red
+            exit 1
+        }
+    }
 }
 
 # --- 7. Создаём релиз -------------------------------------------------
