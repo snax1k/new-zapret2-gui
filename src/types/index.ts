@@ -66,8 +66,7 @@ export interface QuickToggleState {
   quicDesync: boolean;
   /** Обрабатывать голосовой трафик Discord (UDP 50000-65535, l7 discord/stun). */
   discordVoice: boolean;
-  /** Обрабатывать Telegram (профиль по подсетям DC, MTProto без имени хоста). */
-  telegramFix: boolean;
+
   /** Игнорировать хостлисты — применять обход ко всему трафику на портах. */
   allTrafficMode: boolean;
   /** Добавлять --dpi-desync-autottl к профилям с fake. */
@@ -77,7 +76,7 @@ export interface QuickToggleState {
   /**
    * Стратегия обхода для профиля YouTube/Google (TCP 443, list-google.txt).
    * Какая техника пробивает DPI, зависит от провайдера, поэтому вариант
-   * выбирается пользователем. Профили Discord и Telegram при этом не меняются.
+   * выбирается пользователем. Профили Discord при этом не меняются.
    */
   youtubeStrategy: YoutubeStrategyId;
 }

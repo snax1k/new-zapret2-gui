@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.1.4"
+    [string]$Version = "0.1.5"
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,7 +75,7 @@ Compress-Archive -Path $listFiles -DestinationPath "lists.zip" -CompressionLevel
 if (-not (Test-Path "bin\winws.exe")) { throw "bin\winws.exe отсутствует — ядро не будет работать" }
 if (-not (Test-Path "bin\WinDivert64.sys")) { throw "bin\WinDivert64.sys отсутствует" }
 if (-not (Test-Path "bin\cygwin1.dll")) { throw "bin\cygwin1.dll отсутствует (winws — cygwin-сборка)" }
-foreach ($l in @("list-general.txt", "list-google.txt", "list-exclude.txt", "ipset-telegram.txt")) {
+foreach ($l in @("list-general.txt", "list-google.txt", "list-exclude.txt")) {
     if (-not (Test-Path "host-list\$l")) { throw "host-list\$l отсутствует" }
 }
 

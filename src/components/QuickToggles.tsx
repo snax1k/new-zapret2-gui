@@ -25,12 +25,6 @@ export const QuickToggles: React.FC = () => {
       icon: Mic
     },
     {
-      key: 'telegramFix',
-      label: 'Telegram',
-      description: 'Профиль по подсетям Telegram',
-      icon: Globe
-    },
-    {
       key: 'allTrafficMode',
       label: 'Весь трафик (All)',
       description: 'Игнорировать списки доменов',

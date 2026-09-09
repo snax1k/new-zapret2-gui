@@ -333,7 +333,7 @@ export const PresetsView: React.FC = () => {
 
                 <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-relaxed">
                   Состав профилей меняется переключателями на главном экране
-                  (QUIC, Discord, Telegram, «Весь трафик»). Для ручной настройки
+                  (QUIC, Discord, «Весь трафик»). Для ручной настройки
                   создайте свой пресет кнопкой «Создать пресет».
                 </p>
               </div>

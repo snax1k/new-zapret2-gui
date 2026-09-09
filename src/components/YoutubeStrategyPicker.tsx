@@ -25,7 +25,7 @@ export const YoutubeStrategyPicker: React.FC = () => {
             Стратегия YouTube и Google
           </span>
           <p className="text-[10px] text-slate-500 dark:text-slate-400">
-            Меняет только профиль TCP 443 — Discord и Telegram не затрагиваются
+            Меняет только профиль YouTube/Google — профили Discord не затрагиваются
           </p>
         </div>
 

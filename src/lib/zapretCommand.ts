@@ -144,11 +144,6 @@ function isDiscordProfile(tokens: string[]): boolean {
   return !!domains && /discord/.test(domains);
 }
 
-/** Профиль Telegram: отбор по подсетям, потому что у MTProto нет имени хоста. */
-function isTelegramProfile(tokens: string[]): boolean {
-  return tokens.some(t => t.startsWith('--ipset=') && /telegram/i.test(t));
-}
-
 /** Профиль YouTube/Google: TCP-профиль, отбирающий домены по list-google.txt. */
 function isGoogleTcpProfile(tokens: string[]): boolean {
   if (optValue(tokens, OPT_FILTER_TCP) === null) return false;
@@ -301,11 +296,10 @@ function mergePorts(values: string[]): string {
 export const DEFAULT_TOGGLES: QuickToggleState = {
   quicDesync: true,
   discordVoice: true,
-  telegramFix: true,
   allTrafficMode: false,
   autoTtl: false,
   // Пакетный лог ядра пишется в файл с ротацией, поэтому включён по умолчанию:
-  // без него в логах не видно, как проходят соединения Discord/YouTube/Telegram.
+  // без него в логах не видно, как проходят соединения Discord и YouTube.
   verboseLog: true,
   youtubeStrategy: DEFAULT_YOUTUBE_STRATEGY,
 };
@@ -337,7 +331,6 @@ export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFA
   const kept = profiles.filter(p => {
     if (!toggles.quicDesync && isQuicProfile(p)) return false;
     if (!toggles.discordVoice && isDiscordProfile(p)) return false;
-    if (!toggles.telegramFix && isTelegramProfile(p)) return false;
     // Стратегия «off» убирает профиль Google целиком: трафик YouTube пойдёт
     // без вмешательства, и станет видно, мешает обход или блокирует провайдер.
     if (ytStrategy === 'off' && isGoogleTcpProfile(p)) return false;
@@ -433,7 +426,6 @@ function profileTitle(tokens: string[]): string {
 
   if (/discord|stun/.test(l7)) return 'Голосовые серверы Discord';
   if (/discord/.test(domains)) return 'Медиасерверы Discord';
-  if (isTelegramProfile(tokens)) return 'Telegram (отбор по подсетям)';
   if (udp && udp.split(',').indexOf('443') !== -1) return 'QUIC / HTTP-3 (UDP 443)';
   if (/list-google/.test(hostlists)) return 'YouTube и сервисы Google';
   if (tcp) return 'Сайты из списков доменов';

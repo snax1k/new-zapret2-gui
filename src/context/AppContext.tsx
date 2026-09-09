@@ -33,7 +33,7 @@ import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccen
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.1.4';
+export const APP_VERSION = '0.1.5';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -82,7 +82,6 @@ const L_USER = LISTS + 'list-user.txt';
 const L_GOOGLE = LISTS + 'list-google.txt';
 const L_EXCLUDE = LISTS + 'list-exclude.txt';
 const L_EXCLUDE_USER = LISTS + 'list-exclude-user.txt';
-const IPSET_TELEGRAM = LISTS + 'ipset-telegram.txt';
 
 const FAKE_QUIC = 'quic_initial_www_google_com.bin';
 const FAKE_TLS = 'tls_clienthello_www_google_com.bin';
@@ -96,8 +95,13 @@ const EXCLUDES = `--hostlist-exclude=${L_EXCLUDE} --hostlist-exclude=${L_EXCLUDE
  * Порядок профилей важен: ядро выбирает ПЕРВЫЙ подходящий (dp_find в desync.c).
  * Профиль со списком доменов не может выиграть, пока имя хоста неизвестно
  * (dp_match: "profile cannot win if regular hostlists are present ... and
- * hostname is unknown"), поэтому профиль Telegram по подсетям стоит последним
- * и подхватывает MTProto-соединения, у которых имени хоста нет вообще.
+ * hostname is unknown").
+ *
+ * Telegram убран в 0.1.5. Он отбирался по подсетям дата-центров, потому что
+ * MTProto не передаёт имя хоста, и профиль приходилось держать последним.
+ * Пользы это не приносило: в логах соединения с Telegram обрывались на уровне
+ * TCP, до всякого вмешательства, — блокируют выше. Программа нацелена на
+ * YouTube и Discord, и лишний профиль только усложнял разбор логов.
  */
 const INITIAL_PRESETS: Preset[] = [
   {
@@ -105,8 +109,8 @@ const INITIAL_PRESETS: Preset[] = [
     name: 'Универсальный (YouTube + Discord + Сайты)',
     badge: 'Основной',
     recommended: true,
-    description: 'Рабочая конфигурация zapret v72 для Windows: QUIC, голос и медиасерверы Discord, YouTube/Google, обычные сайты и Telegram (по подсетям дата-центров).',
-    tags: ['YouTube', 'Discord RTC', 'Telegram', 'multisplit+seqovl'],
+    description: 'Рабочая конфигурация zapret v72 для Windows: QUIC, голос и медиасерверы Discord, YouTube/Google и обычные сайты из списков.',
+    tags: ['YouTube', 'Discord RTC', 'multisplit+seqovl'],
     args: {
       wfTcp: '80,443,2053,2083,2087,2096,8443',
       wfUdp: '443,19294-19344,50000-65535',
@@ -133,13 +137,8 @@ const INITIAL_PRESETS: Preset[] = [
         // 4. YouTube / Google.
         `--filter-tcp=443 --hostlist=${L_GOOGLE} ${EXCLUDES} --ip-id=zero --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=681 --dpi-desync-split-seqovl-pattern=${FAKE_TLS}`,
 
-        // 5. Остальные сайты из списков.
-        `--filter-tcp=80,443 ${HOSTLISTS} ${EXCLUDES} --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=568 --dpi-desync-split-seqovl-pattern=${FAKE_TLS}`,
-
-        // 6. Telegram. MTProto не передаёт имя хоста, поэтому отбор только по
-        // подсетям и с --dpi-desync-any-protocol; cutoff ограничивает
-        // вмешательство первыми пакетами, иначе рвётся загрузка медиа.
-        `--filter-tcp=80,443 --ipset=${IPSET_TELEGRAM} --dpi-desync=multisplit --dpi-desync-any-protocol=1 --dpi-desync-cutoff=n3 --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=568 --dpi-desync-split-seqovl-pattern=${FAKE_TLS}`
+        // 5. Остальные сайты из списков, включая discord.com и gateway.discord.gg.
+        `--filter-tcp=80,443 ${HOSTLISTS} ${EXCLUDES} --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=568 --dpi-desync-split-seqovl-pattern=${FAKE_TLS}`
       ].join(' --new ')
     }
   }
