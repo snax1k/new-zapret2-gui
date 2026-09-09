@@ -72,3 +72,6 @@ desktop.ini
 .env
 .env.*
 secrets.json
+
+# Приложение кладёт этот файл рядом с exe при запуске (PreloadNativeWebView2Loader).
+release-*/WebView2Loader.dll
