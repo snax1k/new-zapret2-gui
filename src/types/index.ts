@@ -79,10 +79,20 @@ export interface QuickToggleState {
    * выбирается пользователем. Профили Discord при этом не меняются.
    */
   youtubeStrategy: YoutubeStrategyId;
+  /**
+   * Стратегия профиля обычных сайтов. Через него идут discord.com,
+   * gateway.discord.gg и updates.discord.com, поэтому он подбирается
+   * отдельно от YouTube: у провайдеров эти два случая ведут себя по-разному.
+   */
+  sitesStrategy: YoutubeStrategyId;
 }
 
-/** Идентификаторы стратегий профиля YouTube/Google. */
+/** Какой профиль настраивается: YouTube/Google или обычные сайты и Discord. */
+export type StrategyGroup = 'youtube' | 'sites';
+
+/** Идентификаторы стратегий десинхронизации. */
 export type YoutubeStrategyId =
+  | 'seqovl568'
   | 'seqovl681'
   | 'seqovl-midsld'
   | 'fake-md5sig'

@@ -176,7 +176,8 @@ export const PresetsView: React.FC = () => {
       <div className={`p-3.5 rounded-xl border ${
         theme === 'dark' ? 'bg-slate-900/40 border-white/5' : 'bg-white border-slate-200/80 shadow-xs'
       }`}>
-        <YoutubeStrategyPicker />
+        <YoutubeStrategyPicker group="youtube" />
+        <YoutubeStrategyPicker group="sites" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-1">

@@ -2,35 +2,55 @@ import React from 'react';
 import { Wand2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { YOUTUBE_STRATEGIES, findYoutubeStrategy } from '../lib/zapretCommand';
+import { StrategyGroup } from '../types';
+
+interface Props {
+  /** Какой профиль настраивается. По умолчанию YouTube/Google. */
+  group?: StrategyGroup;
+}
 
 /**
- * Выбор техники обхода для профиля YouTube/Google (TCP 443, list-google.txt).
+ * Выбор техники обхода для одного профиля.
+ *
+ * Групп две, и это важно: профиль YouTube/Google (TCP 443, list-google.txt) и
+ * профиль обычных сайтов (TCP 80/443, list-general.txt), через который идут
+ * discord.com, gateway.discord.gg и updates.discord.com. У одного и того же
+ * провайдера они могут требовать разных техник, поэтому подбираются отдельно.
  *
  * Живёт во вкладке «Пресеты», потому что по смыслу это настройка пресета,
  * а не быстрый переключатель: она меняет аргументы одного профиля в командной
  * строке winws. На главной остаётся только кнопка автоподбора.
- *
- * Какая техника пробивает DPI, зависит от провайдера и меняется со временем,
- * поэтому вариант подбирается перебором, а не задаётся раз и навсегда.
  */
-export const YoutubeStrategyPicker: React.FC = () => {
-  const { quickToggles, setYoutubeStrategy, setIsAutotuneModalOpen, isAutotuneRunning, theme } = useApp();
-  const active = findYoutubeStrategy(quickToggles.youtubeStrategy);
+export const YoutubeStrategyPicker: React.FC<Props> = ({ group = 'youtube' }) => {
+  const {
+    quickToggles, setYoutubeStrategy, setSitesStrategy,
+    setIsAutotuneModalOpen, setAutotuneGroup, isAutotuneRunning, theme
+  } = useApp();
+
+  const isYoutube = group === 'youtube';
+  const active = findYoutubeStrategy(
+    isYoutube ? quickToggles.youtubeStrategy : quickToggles.sitesStrategy
+  );
+  const setStrategy = isYoutube ? setYoutubeStrategy : setSitesStrategy;
+  const title = isYoutube ? 'Стратегия YouTube и Google' : 'Стратегия сайтов и Discord';
+  const subtitle = isYoutube
+    ? 'Профиль TCP 443 со списком list-google.txt'
+    : 'Профиль сайтов из списков — через него идут discord.com и gateway.discord.gg';
 
   return (
     <div className="space-y-2.5 select-none">
       <div className="flex items-center justify-between px-0.5">
         <div>
           <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Стратегия YouTube и Google
+            {title}
           </span>
           <p className="text-[10px] text-slate-500 dark:text-slate-400">
-            Меняет только профиль YouTube/Google — профили Discord не затрагиваются
+            {subtitle}
           </p>
         </div>
 
         <button
-          onClick={() => setIsAutotuneModalOpen(true)}
+          onClick={() => { setAutotuneGroup(group); setIsAutotuneModalOpen(true); }}
           className={`flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1.5 rounded-lg border transition-colors whitespace-nowrap ${
             isAutotuneRunning
               ? 'border-indigo-500/50 bg-indigo-500/20 text-indigo-400'
@@ -50,7 +70,7 @@ export const YoutubeStrategyPicker: React.FC = () => {
           return (
             <button
               key={s.id}
-              onClick={() => setYoutubeStrategy(s.id)}
+              onClick={() => setStrategy(s.id)}
               title={s.hint}
               className={`px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all duration-200 ${
                 isActive

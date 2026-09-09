@@ -2,11 +2,12 @@ import React from 'react';
 import { Wand2, X, Loader2, CheckCircle2, XCircle, Circle, Play, Square } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { findYoutubeStrategy } from '../lib/zapretCommand';
+import { StrategyGroup } from '../types';
 
 
 
 /**
- * Автоподбор стратегии YouTube.
+ * Автоподбор стратегии.
  *
  * Раньше подбор выглядел так: переключить чип, дождаться перезапуска ядра,
  * очистить кэш DNS, открыть новую вкладку, посмотреть, повторить. Семь раз.
@@ -20,7 +21,8 @@ import { findYoutubeStrategy } from '../lib/zapretCommand';
 export const AutotuneModal: React.FC = () => {
   const {
     autotuneRows, isAutotuneRunning, startAutotune, cancelAutotune,
-    setYoutubeStrategy, quickToggles,
+    autotuneGroup, setAutotuneGroup,
+    setYoutubeStrategy, setSitesStrategy, quickToggles,
     isAutotuneModalOpen, setIsAutotuneModalOpen, theme
   } = useApp();
 
@@ -32,8 +34,21 @@ export const AutotuneModal: React.FC = () => {
   const winners = finished.filter(r => r.ok).sort((a, b) => a.ms - b.ms);
   const allDone = autotuneRows.length > 0 && finished.length === autotuneRows.length;
 
+  // Группы подбираются раздельно, потому что провайдеры ведут себя с
+  // YouTube и с Discord по-разному: у одного и того же человека для YouTube
+  // может проходить seqovl, а для Discord — только multidisorder.
+  const groups: { id: StrategyGroup; label: string; targets: string }[] = [
+    { id: 'youtube', label: 'YouTube', targets: 'www.youtube.com, googlevideo.com' },
+    { id: 'sites', label: 'Сайты и Discord', targets: 'discord.com, gateway.discord.gg, updates.discord.com' }
+  ];
+  const currentGroup = groups.find(g => g.id === autotuneGroup) || groups[0];
+  const currentStrategyId = autotuneGroup === 'youtube'
+    ? quickToggles.youtubeStrategy
+    : quickToggles.sitesStrategy;
+
   const apply = (id: typeof autotuneRows[number]['id']) => {
-    setYoutubeStrategy(id);
+    if (autotuneGroup === 'youtube') setYoutubeStrategy(id);
+    else setSitesStrategy(id);
     onClose();
   };
 
@@ -49,7 +64,7 @@ export const AutotuneModal: React.FC = () => {
               <Wand2 className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold">Автоподбор стратегии YouTube</h3>
+              <h3 className="text-sm font-bold">Автоподбор стратегии</h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Ядро поднимается с каждым вариантом, затем идёт проверка TCP + TLS
               </p>
@@ -64,14 +79,36 @@ export const AutotuneModal: React.FC = () => {
           </button>
         </div>
 
+        {/* Что подбираем */}
+        <div className="flex items-center gap-1 p-0.5 rounded-xl bg-black/5 dark:bg-white/5">
+          {groups.map(g => (
+            <button
+              key={g.id}
+              onClick={() => setAutotuneGroup(g.id)}
+              disabled={isAutotuneRunning}
+              className={`flex-1 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors disabled:opacity-40 ${
+                autotuneGroup === g.id
+                  ? 'bg-white dark:bg-white/15 text-slate-900 dark:text-slate-100 shadow-xs'
+                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
+
         {/* Пояснение до запуска */}
         {autotuneRows.length === 0 && (
           <div className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400 space-y-2">
             <p>
-              Будут проверены шесть вариантов обхода на двух целях:
-              <span className="font-mono text-indigo-500"> www.youtube.com</span> и
-              <span className="font-mono text-indigo-500"> googlevideo.com</span>.
-              Займёт примерно полторы минуты.
+              Будут проверены семь вариантов обхода на целях:
+              <span className="font-mono text-indigo-500"> {currentGroup.targets}</span>.
+              Займёт до двух минут.
+            </p>
+            <p>
+              Подбор меняет только профиль «{currentGroup.label}». Вторая группа
+              настраивается отдельно — у провайдеров эти случаи ведут себя
+              по-разному, и один результат не переносится на другой.
             </p>
             <p>
               На это время обход будет перезапускаться, связь может кратко прерываться.
@@ -165,7 +202,7 @@ export const AutotuneModal: React.FC = () => {
         {/* Кнопки */}
         <div className="flex items-center justify-between pt-1">
           <span className="text-[10px] text-slate-500 dark:text-slate-400">
-            Текущая стратегия: {findYoutubeStrategy(quickToggles.youtubeStrategy).label}
+            {currentGroup.label} — сейчас: {findYoutubeStrategy(currentStrategyId).label}
           </span>
 
           {isAutotuneRunning ? (
@@ -178,7 +215,7 @@ export const AutotuneModal: React.FC = () => {
             </button>
           ) : (
             <button
-              onClick={startAutotune}
+              onClick={() => startAutotune(autotuneGroup)}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600"
             >
               <Play className="w-3.5 h-3.5" />

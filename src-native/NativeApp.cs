@@ -1388,6 +1388,53 @@ namespace Zapret2App
             }
         }
 
+        [DllImport("dnsapi.dll", EntryPoint = "DnsFlushResolverCache", SetLastError = true)]
+        private static extern uint DnsFlushResolverCache();
+
+        /// <summary>
+        /// Сбрасывает кэш DNS распознавателя Windows.
+        /// </summary>
+        /// <remarks>
+        /// Нужно потому, что до включения обхода система могла закэшировать
+        /// адреса, подменённые провайдером. Пока запись живёт в кэше, она
+        /// используется и с включённым обходом.
+        ///
+        /// Вызывается напрямую через dnsapi.dll, а не запуском ipconfig через
+        /// оболочку. Причина не в скорости: «программа скрыто запускает
+        /// командную оболочку» — ровно тот признак, за который эвристика
+        /// антивирусов помечает сборку (см. docs/antivirus-false-positive.md).
+        /// Здесь не порождается ни одного процесса.
+        ///
+        /// DnsFlushResolverCache не документирован, поэтому если экспорта не
+        /// окажется — откатываемся на ipconfig.exe, запущенный НАПРЯМУЮ, без
+        /// cmd.exe.
+        ///
+        /// Своё действие эта чистка не переоценивает: у Discord и браузеров
+        /// есть собственный кэш DNS внутри процесса, на уже запущенное
+        /// приложение системный сброс не влияет.
+        /// </remarks>
+        private void FlushDnsCache()
+        {
+            try
+            {
+                uint rc = DnsFlushResolverCache();
+                if (rc != 0)
+                {
+                    SendLog("info", "Кэш DNS сброшен (код " + rc + ").", "DNS");
+                    return;
+                }
+                SendLog("info", "Кэш DNS сброшен.", "DNS");
+            }
+            catch (Exception ex)
+            {
+                // EntryPointNotFoundException или DllNotFoundException — редкий
+                // случай, но молчать о нём нельзя.
+                SendLog("info", "Прямой сброс кэша DNS недоступен (" + ex.GetType().Name + "), пробуем ipconfig.", "DNS");
+                RunSilent("ipconfig.exe", "/flushdns");
+                SendLog("info", "Кэш DNS сброшен через ipconfig.", "DNS");
+            }
+        }
+
         private static void RunSilent(string exe, string args)
         {
             try
@@ -1547,6 +1594,13 @@ namespace Zapret2App
             ResetActivity();
 
             WarnIfSystemProxy();
+
+            // Чистим кэш до старта ядра: записи, подменённые провайдером,
+            // иначе продолжат использоваться уже при включённом обходе.
+            // При автоподборе пропускаем — ядро там перезапускается на каждый
+            // вариант, и семь одинаковых строк в логе только мешают.
+            if (!autotuneRunning) FlushDnsCache();
+
             SendLog("info", "Рабочий каталог ядра: " + dir, "Runner");
             SendLog("info", "winws.exe " + cleanArgs, "Runner");
 

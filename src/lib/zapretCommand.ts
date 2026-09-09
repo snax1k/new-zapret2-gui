@@ -176,6 +176,17 @@ const FAKE_TLS_BIN = 'tls_clienthello_www_google_com.bin';
  */
 export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
   {
+    id: 'seqovl568',
+    label: 'seqovl 568',
+    hint: 'Перекрытие обрезанной записью ClientHello. Так профиль сайтов работал до 0.1.5.',
+    options: [
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=1',
+      '--dpi-desync-split-seqovl=568',
+      '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
     id: 'seqovl681',
     label: 'seqovl 681',
     hint: 'Перекрытие sequence фейковым ClientHello google.com. Базовый вариант.',
@@ -260,6 +271,23 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
 
 export const DEFAULT_YOUTUBE_STRATEGY: YoutubeStrategyId = 'seqovl681';
 
+/**
+ * Профиль сайтов по умолчанию оставлен таким, каким был до 0.1.5, чтобы
+ * обновление никому не сломало уже работающую настройку. Кому не работает —
+ * подбирает автоподбором.
+ */
+export const DEFAULT_SITES_STRATEGY: YoutubeStrategyId = 'seqovl568';
+
+/**
+ * Профиль обычных сайтов из списков. Через него идут discord.com,
+ * gateway.discord.gg и updates.discord.com — то есть всё, что держит клиент
+ * Discord на заставке, если не проходит.
+ */
+export function isGeneralSitesProfile(tokens: string[]): boolean {
+  if (optValue(tokens, OPT_FILTER_TCP) === null) return false;
+  return tokens.some(t => t.startsWith('--hostlist=') && /list-general/i.test(t));
+}
+
 export function findYoutubeStrategy(id: YoutubeStrategyId): YoutubeStrategy {
   return YOUTUBE_STRATEGIES.find(s => s.id === id)
     || YOUTUBE_STRATEGIES[0];
@@ -269,7 +297,7 @@ export function findYoutubeStrategy(id: YoutubeStrategyId): YoutubeStrategy {
  * Заменяет в профиле YouTube/Google опции десинхронизации на выбранную
  * стратегию. Фильтр портов, хостлисты и исключения остаются как в пресете.
  */
-function applyYoutubeStrategy(tokens: string[], id: YoutubeStrategyId): string[] {
+function applyStrategy(tokens: string[], id: YoutubeStrategyId): string[] {
   const strategy = findYoutubeStrategy(id);
   const base = tokens.filter(t =>
     !t.startsWith('--dpi-desync') && !t.startsWith('--ip-id=')
@@ -302,6 +330,7 @@ export const DEFAULT_TOGGLES: QuickToggleState = {
   // без него в логах не видно, как проходят соединения Discord и YouTube.
   verboseLog: true,
   youtubeStrategy: DEFAULT_YOUTUBE_STRATEGY,
+  sitesStrategy: DEFAULT_SITES_STRATEGY,
 };
 
 /**
@@ -328,12 +357,14 @@ export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFA
   // 2. Отбрасываем профили, отключённые быстрыми переключателями.
   let profiles = allProfiles.filter(p => p.length > 0);
   const ytStrategy = toggles.youtubeStrategy || DEFAULT_YOUTUBE_STRATEGY;
+  const sitesStrategy = toggles.sitesStrategy || DEFAULT_SITES_STRATEGY;
   const kept = profiles.filter(p => {
     if (!toggles.quicDesync && isQuicProfile(p)) return false;
     if (!toggles.discordVoice && isDiscordProfile(p)) return false;
     // Стратегия «off» убирает профиль Google целиком: трафик YouTube пойдёт
     // без вмешательства, и станет видно, мешает обход или блокирует провайдер.
     if (ytStrategy === 'off' && isGoogleTcpProfile(p)) return false;
+    if (sitesStrategy === 'off' && isGeneralSitesProfile(p)) return false;
     return true;
   });
   // Никогда не отдаём ядру пустую конфигурацию.
@@ -341,7 +372,9 @@ export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFA
 
   // 3. Модификации внутри профилей.
   profiles = profiles.map(p => {
-    let tokens = isGoogleTcpProfile(p) ? applyYoutubeStrategy(p, ytStrategy) : p;
+    let tokens = p;
+    if (isGoogleTcpProfile(p)) tokens = applyStrategy(p, ytStrategy);
+    else if (isGeneralSitesProfile(p)) tokens = applyStrategy(p, sitesStrategy);
 
     if (toggles.allTrafficMode) {
       tokens = tokens.filter(t => !HOSTLIST_PREFIXES.some(pref => t.startsWith(pref)));

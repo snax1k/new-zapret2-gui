@@ -14,6 +14,7 @@ import {
   UpdateInfo,
   QuickToggleBooleanKey,
   YoutubeStrategyId,
+  StrategyGroup,
   PreflightItem,
   AutotuneRow
 } from '../types';
@@ -271,6 +272,7 @@ interface AppContextType {
   quickToggles: QuickToggleState;
   toggleQuickSetting: (key: QuickToggleBooleanKey) => void;
   setYoutubeStrategy: (id: YoutubeStrategyId) => void;
+  setSitesStrategy: (id: YoutubeStrategyId) => void;
 
   /** Предполётная проверка окружения: что помешает обходу сработать. */
   preflight: PreflightItem[];
@@ -279,7 +281,10 @@ interface AppContextType {
   /** Автоподбор стратегии YouTube. */
   autotuneRows: AutotuneRow[];
   isAutotuneRunning: boolean;
-  startAutotune: () => void;
+  /** Какая группа профилей подбирается сейчас. */
+  autotuneGroup: StrategyGroup;
+  setAutotuneGroup: (g: StrategyGroup) => void;
+  startAutotune: (group?: StrategyGroup) => void;
   cancelAutotune: () => void;
   /** Модалка автоподбора открывается и с главной, и из «Пресетов». */
   isAutotuneModalOpen: boolean;
@@ -454,6 +459,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [autotuneRows, setAutotuneRows] = useState<AutotuneRow[]>([]);
   const [isAutotuneRunning, setIsAutotuneRunning] = useState(false);
   const [isAutotuneModalOpen, setIsAutotuneModalOpen] = useState(false);
+  const [autotuneGroup, setAutotuneGroup] = useState<StrategyGroup>('youtube');
 
   // Handle IPC Messages from Native C# Host
   useEffect(() => {
@@ -865,12 +871,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * а эталон для сравнения, и проверять его отдельно смысла нет — если он
    * пройдёт, значит обход для YouTube вообще не нужен.
    */
-  const startAutotune = () => {
+  const startAutotune = (group: StrategyGroup = autotuneGroup) => {
     if (isAutotuneRunning) return;
     if (!window.chrome?.webview) {
       addLog('error', 'Автоподбор доступен только внутри приложения.', 'Autotune');
       return;
     }
+
+    setAutotuneGroup(group);
 
     const variants = YOUTUBE_STRATEGIES.filter(s => s.id !== 'off');
     setAutotuneRows(variants.map(s => ({
@@ -885,12 +893,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ? buildPresetArgs(activePreset, quickToggles)
       : '';
 
-    const hosts = 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com';
+    // Цели подбираются под группу. Для сайтов это именно те хосты, на
+    // которых клиент Discord застревает на заставке «Starting»: сначала он
+    // спрашивает обновления, потом API, потом открывает шлюз.
+    const hosts = group === 'youtube'
+      ? 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com'
+      : 'discord.com,gateway.discord.gg,updates.discord.com';
+
     const body = variants
-      .map(s => [s.id, s.label, buildPresetArgs(activePreset, { ...quickToggles, youtubeStrategy: s.id })].join('|'))
+      .map(s => {
+        const toggles = group === 'youtube'
+          ? { ...quickToggles, youtubeStrategy: s.id }
+          : { ...quickToggles, sitesStrategy: s.id };
+        return [s.id, s.label, buildPresetArgs(activePreset, toggles)].join('|');
+      })
       .join('\x1e');
 
-    addLog('info', `Автоподбор: ${variants.length} вариантов, цели ${hosts}`, 'Autotune');
+    addLog(
+      'info',
+      `Автоподбор (${group === 'youtube' ? 'YouTube' : 'сайты и Discord'}): ${variants.length} вариантов, цели ${hosts}`,
+      'Autotune'
+    );
     window.chrome.webview.postMessage('save_lists:' + serializeLists());
     window.chrome.webview.postMessage('autotune:' + [restore, hosts, body].join('\x1f'));
   };
@@ -906,6 +929,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (prev.youtubeStrategy === id) return prev;
       const next = { ...prev, youtubeStrategy: id };
       applyToggles(next, `Стратегия YouTube: ${findYoutubeStrategy(id).label}`);
+      return next;
+    });
+  };
+
+  const setSitesStrategy = (id: YoutubeStrategyId) => {
+    setQuickToggles(prev => {
+      if (prev.sitesStrategy === id) return prev;
+      const next = { ...prev, sitesStrategy: id };
+      applyToggles(next, `Стратегия сайтов и Discord: ${findYoutubeStrategy(id).label}`);
       return next;
     });
   };
@@ -1253,10 +1285,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         quickToggles,
         toggleQuickSetting,
         setYoutubeStrategy,
+        setSitesStrategy,
         preflight,
         runPreflight,
         autotuneRows,
         isAutotuneRunning,
+        autotuneGroup,
+        setAutotuneGroup,
         startAutotune,
         cancelAutotune,
         isAutotuneModalOpen,
