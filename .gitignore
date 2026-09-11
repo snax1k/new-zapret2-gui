@@ -75,3 +75,12 @@ secrets.json
 
 # Приложение кладёт этот файл рядом с exe при запуске (PreloadNativeWebView2Loader).
 release-*/WebView2Loader.dll
+
+# Каталоги прошлых сборок. Сами файлы раздаются через GitHub Releases, а в
+# дереве репозитория каждая версия весит 2,5 МБ. Каталог текущей версии
+# остаётся отслеживаемым: из release-v<версия>/README.txt берётся описание
+# релиза (publish_release.ps1 -UpdateNotes).
+release-v0.1.1/
+release-v0.1.2/
+release-v0.1.3/
+release-v0.1.4/
