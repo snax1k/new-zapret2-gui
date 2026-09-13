@@ -442,6 +442,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     isInstalled: false,
     assetUrl: '',
     assetSha256: '',
+    assetSumsUrl: '',
     error: '',
     lastCheckedAt: localStorage.getItem(UPDATE_CHECK_KEY) || ''
   });
@@ -1090,6 +1091,51 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+/**
+ * Превращает описание релиза в список строк для окна обновления.
+ *
+ * Описание — это README.txt релиза, завёрнутый в тройные кавычки, с рамками
+ * из знаков «=» и жёсткими переносами. Построчный разбор давал в окне мусор:
+ * первым пунктом шли сами кавычки, вторым — линейка из «=», а предложения
+ * рвались посередине. Поэтому: убираем рамки, склеиваем абзацы обратно в
+ * предложения и выкидываем шапку с именем файла и версией ядра — она уже
+ * показана выше в самом окне.
+ */
+const parseReleaseHighlights = (body: string): string[] => {
+  // Линейка из «=» или «-» — это граница, а не мусор: под ней идёт текст
+  // раздела, и если её просто выбросить, заголовок слипается со следующей
+  // строкой («ОЧИСТКА КЭША DISCORD Настройки -> ...»).
+  const lines = String(body || '')
+    .replace(/```/g, '')
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .map(l => (/^[=\-_*]{4,}$/.test(l) ? '' : l));
+
+  const blocks: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (line) { current.push(line); continue; }
+    if (current.length) { blocks.push(current.join(' ')); current = []; }
+  }
+  if (current.length) blocks.push(current.join(' '));
+
+  const meaningful = blocks
+    .filter(b => !/^Zapret2 Control Center v/i.test(b))
+    .filter(b => !/^(Файл|Ядро)\s*:/i.test(b));
+
+  // Заголовки разделов написаны прописными — это и есть готовый ответ на
+  // вопрос «что включено». Если их в описании хотя бы два, показываем
+  // вступление и заголовки; иначе просто первые абзацы.
+  const isHeading = (b: string) => b.length < 80 && b === b.toUpperCase() && /[А-ЯA-Z]/.test(b);
+  const headings = meaningful.filter(isHeading);
+  const intro = meaningful.find(b => !isHeading(b));
+
+  if (headings.length >= 2) {
+    return [intro || '', ...headings].filter(Boolean).slice(0, 5);
+  }
+  return meaningful.slice(0, 4);
+};
+
   /**
    * Проверка обновлений самого приложения.
    *
@@ -1101,6 +1147,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * Из ассетов релиза берутся два файла: сборка *-portable.exe и
    * SHA256SUMS.txt. Без контрольной суммы установка не выполняется — иначе
    * мы запускали бы непроверенный exe с правами администратора.
+   *
+   * Сам файл сумм отсюда НЕ качается. Страница живёт на https://app.zapret,
+   * ассеты релиза раздаются с другого хоста, и тот не отдаёт заголовки CORS:
+   * fetch падает с «TypeError: Failed to fetch». Выглядело это так, будто
+   * файла сумм в релизе нет, и установка из приложения не работала ни разу.
+   * Теперь ссылка передаётся нативной части, а качает и сверяет она.
    */
   const checkForUpdates = async (silent: boolean = false) => {
     setUpdateInfo(prev => ({ ...prev, isChecking: true, error: '' }));
@@ -1129,17 +1181,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const exe = assets.find(a => /-portable\.exe$/i.test(a.name || ''));
       const sums = assets.find(a => /^SHA256SUMS\.txt$/i.test(a.name || ''));
 
-      // Контрольную сумму тянем сразу: если её нет, кнопку установки
-      // показывать нельзя, и пользователь должен узнать об этом заранее.
-      let sha = '';
-      if (hasUpdate && exe && sums) {
-        try {
-          const t = await (await fetch(sums.browser_download_url)).text();
-          const line = t.split(/\r?\n/).find(l => l.toLowerCase().includes(String(exe.name).toLowerCase()));
-          const m = line && line.match(/\b([a-f0-9]{64})\b/i);
-          if (m) sha = m[1].toLowerCase();
-        } catch { /* сумма не обязательна для показа, но обязательна для установки */ }
-      }
+      // Наличие файла сумм видно по списку ассетов, и этого достаточно:
+      // содержимое прочитает нативная часть перед самой установкой.
+      const sumsUrl = sums ? String(sums.browser_download_url || '') : '';
 
       setUpdateInfo(prev => ({
         ...prev,
@@ -1152,20 +1196,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         releaseUrl: data.html_url || prev.releaseUrl,
         releaseTitle: data.name || `Zapret2 Control Center v${latest}`,
         assetUrl: exe ? exe.browser_download_url : '',
-        assetSha256: sha,
+        assetSha256: '',
+        assetSumsUrl: sumsUrl,
         error: '',
         lastCheckedAt: checkedAt,
-        highlights: String(data.body || '')
-          .split(/\r?\n/)
-          .map((l: string) => l.replace(/^[-*+#\s]+/, '').trim())
-          .filter(Boolean)
-          .slice(0, 5)
+        highlights: parseReleaseHighlights(data.body)
       }));
 
       if (hasUpdate) {
         addLog('warn', `Доступна версия ${latest}, установлена ${APP_VERSION}.`, 'UpdateChecker');
         if (!exe) addLog('warn', 'В релизе нет файла *-portable.exe — установить нечего.', 'UpdateChecker');
-        else if (!sha) addLog('warn', 'В релизе нет SHA256SUMS.txt — установка недоступна, только ручная загрузка.', 'UpdateChecker');
+        else if (!sumsUrl) addLog('warn', 'В релизе нет SHA256SUMS.txt — установка недоступна, только ручная загрузка.', 'UpdateChecker');
         // При автопроверке окно не открываем: человек запустил программу
         // ради обхода, а не ради диалога. Плашка в боковом меню уже видна.
         if (!silent) setIsUpdateModalOpen(true);
@@ -1247,7 +1288,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       addLog('error', 'Установка доступна только внутри приложения.', 'Updater');
       return;
     }
-    if (!updateInfo.assetUrl || !updateInfo.assetSha256) {
+    if (!updateInfo.assetUrl || !updateInfo.assetSumsUrl) {
       addLog('warn', 'Нет проверенной сборки — открываю страницу релиза.', 'Updater');
       openReleasePage();
       return;
@@ -1255,8 +1296,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     addLog('info', `Загрузка версии ${updateInfo.latestVersion}...`, 'Updater');
     setUpdateInfo(prev => ({ ...prev, isDownloading: true, downloadProgress: 0, downloadStep: 'Подготовка...', error: '' }));
+    // Вторым полем идёт ссылка на SHA256SUMS.txt: нативная часть скачает его
+    // сама и достанет сумму. Из веб-слоя этот файл недоступен из-за CORS.
     window.chrome.webview.postMessage(
-      'download_update:' + [updateInfo.assetUrl, updateInfo.assetSha256, updateInfo.latestVersion].join('|')
+      'download_update:' + [updateInfo.assetUrl, updateInfo.assetSumsUrl, updateInfo.latestVersion].join('|')
     );
   };
 

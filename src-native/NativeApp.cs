@@ -1487,9 +1487,59 @@ namespace Zapret2App
             }
         }
 
+        /// <summary>
+        /// Скачивает SHA256SUMS.txt и достаёт из него сумму нужного файла.
+        /// </summary>
+        /// <remarks>
+        /// Качать этот файл обязана нативная часть, а не интерфейс. Страница
+        /// живёт на https://app.zapret, ассеты релиза раздаются с другого хоста,
+        /// и тот не отдаёт заголовки CORS: fetch из веб-слоя падает с
+        /// «TypeError: Failed to fetch». api.github.com заголовки отдаёт,
+        /// поэтому список ассетов приходит нормально — и выглядело это так,
+        /// будто файла сумм в релизе нет. Установка из приложения из-за этого
+        /// не работала ни разу, с самого 0.1.2.
+        ///
+        /// WebClient никакого CORS не знает: это обычный HTTP-клиент.
+        /// </remarks>
+        /// <returns>64 hex-символа в нижнем регистре или пустая строка.</returns>
+        private string FetchSha256FromSums(string sumsUrl, string fileName)
+        {
+            try
+            {
+                try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; }
+                catch { }
+
+                string text;
+                using (var wc = new WebClient())
+                {
+                    wc.Headers.Add("User-Agent", "Zapret2-GUI/" + AppVersion);
+                    text = wc.DownloadString(sumsUrl);
+                }
+
+                foreach (string raw in text.Split('\n'))
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0) continue;
+                    // Строка формата "<sha256>  <имя файла>". Имя сверяем, потому
+                    // что в файле сумм может оказаться несколько строк.
+                    if (line.IndexOf(fileName, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                    var m = Regex.Match(line, @"\b[a-fA-F0-9]{64}\b");
+                    if (m.Success) return m.Value.ToLowerInvariant();
+                }
+
+                SendLog("warn", "В файле сумм нет строки для " + fileName + ".", "Updater");
+            }
+            catch (Exception ex)
+            {
+                SendLog("warn", "Не удалось скачать файл контрольных сумм: " + ex.Message, "Updater");
+            }
+            return string.Empty;
+        }
+
         private void DownloadAndApplyUpdate(string payload)
         {
-            // payload: <url>|<sha256>|<version>
+            // payload: <url>|<sha256 или ссылка на SHA256SUMS.txt>|<version>
             string[] parts = (payload ?? string.Empty).Split(new[] { '|' }, 3);
             if (parts.Length < 3)
             {
@@ -1498,12 +1548,39 @@ namespace Zapret2App
             }
 
             string url = parts[0].Trim();
-            string expectedSha = parts[1].Trim().ToLowerInvariant();
+            string shaOrSums = parts[1].Trim();
             string version = parts[2].Trim();
 
             if (!IsTrustedUpdateUrl(url))
             {
                 SendUpdateError("Ссылка на обновление ведёт не на GitHub — загрузка отменена: " + url);
+                return;
+            }
+
+            // Ссылку на файл сумм проверяем тем же правилом: она приходит из
+            // веб-слоя и ведёт в сеть ровно так же, как ссылка на сборку.
+            string expectedSha;
+            if (shaOrSums.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!IsTrustedUpdateUrl(shaOrSums))
+                {
+                    SendUpdateError("Ссылка на файл контрольных сумм ведёт не на GitHub — загрузка отменена.");
+                    return;
+                }
+                expectedSha = FetchSha256FromSums(shaOrSums, Path.GetFileName(new Uri(url).LocalPath));
+            }
+            else
+            {
+                expectedSha = shaOrSums.ToLowerInvariant();
+            }
+
+            if (expectedSha.Length != 64)
+            {
+                // Раньше эта проверка стояла после загрузки: файл качался
+                // целиком и только потом выяснялось, что сверять не с чем.
+                SendUpdateError(
+                    "Не удалось получить контрольную сумму сборки — установка отменена. " +
+                    "Скачайте сборку вручную со страницы релиза и сверьте сумму сами.");
                 return;
             }
 
@@ -1596,27 +1673,16 @@ namespace Zapret2App
                         return;
                     }
 
-                    if (expectedSha.Length == 64)
+                    // Сумма получена до загрузки, иначе сюда не дошли бы.
+                    if (actual != expectedSha)
                     {
-                        if (actual != expectedSha)
-                        {
-                            SendUpdateError(
-                                "Контрольная сумма не совпала. Ожидалось " + expectedSha +
-                                ", получено " + actual + ". Установка отменена.");
-                            try { File.Delete(tmp); } catch { }
-                            return;
-                        }
-                        SendLog("success", "SHA-256 совпал: " + actual, "Updater");
-                    }
-                    else
-                    {
-                        // Без суммы в релизе ставить нельзя: мы бы запускали
-                        // непроверенный exe с правами администратора.
                         SendUpdateError(
-                            "В релизе нет файла SHA256SUMS.txt — проверить сборку нечем. " +
-                            "Установка отменена, скачайте вручную со страницы релиза.");
+                            "Контрольная сумма не совпала. Ожидалось " + expectedSha +
+                            ", получено " + actual + ". Установка отменена.");
+                        try { File.Delete(tmp); } catch { }
                         return;
                     }
+                    SendLog("success", "SHA-256 совпал: " + actual, "Updater");
 
                     SendUpdateProgress(96, "Подготовка замены...");
 

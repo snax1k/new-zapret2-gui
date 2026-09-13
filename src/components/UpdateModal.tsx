@@ -9,7 +9,9 @@ export const UpdateModal: React.FC = () => {
 
   // Ставить без контрольной суммы нельзя: exe запускается с правами
   // администратора, и непроверенный файл здесь недопустим.
-  const canInstall = !!updateInfo.assetUrl && !!updateInfo.assetSha256;
+  // Содержимое файла сумм читает нативная часть перед установкой; здесь
+  // достаточно знать, что файл в релизе есть.
+  const canInstall = !!updateInfo.assetUrl && !!updateInfo.assetSumsUrl;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fadeIn select-none">
