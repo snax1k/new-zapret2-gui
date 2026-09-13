@@ -206,8 +206,17 @@ namespace Zapret2App
             return principal.IsInRole(WindowsBuiltInRole.Administrator);
         }
 
-        public static void KillZombieWinDivert()
+        /// <summary>
+        /// Завершает все процессы winws.exe в системе, включая свой
+        /// собственный. Вызывается на старте, при остановке и на выходе,
+        /// то есть там, где своё ядро всё равно снимается. Для кнопки
+        /// «Очистить зависшие winws» нужен <see cref="KillStaleWinws"/>: он трогает
+        /// только чужие экземпляры.
+        /// </summary>
+        /// <returns>Сколько процессов фактически завершилось.</returns>
+        public static int KillZombieWinDivert()
         {
+            int gone = 0;
             try
             {
                 Process[] procs = Process.GetProcessesByName("winws");
@@ -217,10 +226,12 @@ namespace Zapret2App
                     // мьютекс Global\winws_arg_* и следующий запуск с тем же
                     // фильтром будет отклонён ядром.
                     try { p.Kill(); p.WaitForExit(3000); } catch { }
+                    try { if (p.HasExited) gone++; } catch { }
                     try { p.Dispose(); } catch { }
                 }
             }
             catch { }
+            return gone;
         }
 
         public MainForm()
@@ -1312,6 +1323,114 @@ namespace Zapret2App
             {
                 SendLog("error", "Проверка окружения не удалась: " + ex.Message, "Preflight");
             }
+        }
+
+        /// <summary>
+        /// Находит и завершает посторонние процессы winws.exe — те, которые
+        /// приложение не запускало, — и отчитывается о результате числами.
+        /// </summary>
+        /// <remarks>
+        /// Свой процесс ядра исключается по PID: он снимается кнопкой питания,
+        /// а не этой очисткой. Смысл именно в чужих экземплярах: два процесса
+        /// на одном драйвере WinDivert дерутся за пакеты — это же ловит пункт
+        /// «Найдены посторонние winws.exe» в <see cref="CollectPreflight"/>.
+        ///
+        /// «Найдено» и «завершено» возвращаются отдельно, потому что процесс
+        /// может и не сняться, и это обязано быть видно. Раньше интерфейс
+        /// отправлял сюда stop_engine (то есть останавливал СВОЁ ядро) и через
+        /// 800 мс печатал «все зависшие процессы очищены (taskkill выполнено)»,
+        /// не проверив ничего и назвав команду, которой не было.
+        ///
+        /// Итоговую строку в журнал пишет интерфейс — по полям этого ответа.
+        /// Подробности по каждому PID уходят только в файл через WriteLogFile:
+        /// в журнале нужна одна строка, а разбор «почему не снялся» делается
+        /// по zapret2.log.
+        /// </remarks>
+        private void KillStaleWinws()
+        {
+            int mine = 0;
+            try
+            {
+                lock (procLock) { if (winws != null && !winws.HasExited) mine = winws.Id; }
+            }
+            catch { }
+
+            Process[] procs;
+            try
+            {
+                procs = Process.GetProcessesByName("winws");
+            }
+            catch (Exception ex)
+            {
+                SendLog("error", "Не удалось получить список процессов winws.exe: " + ex.Message, "Watchdog");
+                SendToWeb(string.Format(
+                    "{{\"type\":\"stale_winws_done\",\"found\":0,\"killed\":0,\"failed\":0," +
+                    "\"pids\":[],\"killedPids\":[],\"ownPid\":{0},\"error\":\"{1}\"}}",
+                    mine, JsonEscape(ex.Message)));
+                return;
+            }
+
+            var found = new System.Collections.Generic.List<int>();
+            var killed = new System.Collections.Generic.List<int>();
+            int failed = 0;
+
+            foreach (Process p in procs)
+            {
+                int pid = 0;
+                try { pid = p.Id; } catch { }
+
+                if (pid == 0 || pid == mine)
+                {
+                    try { p.Dispose(); } catch { }
+                    continue;
+                }
+
+                found.Add(pid);
+
+                string reason = null;
+                try
+                {
+                    p.Kill();
+                    // Ждём фактического завершения: пока процесс жив, он держит
+                    // мьютекс Global\winws_arg_* и мешает следующему запуску.
+                    p.WaitForExit(3000);
+                }
+                catch (Exception ex)
+                {
+                    // Процесс мог закончиться сам между перечислением и Kill —
+                    // это не ошибка. Судим по HasExited, а не по исключению.
+                    reason = ex.Message;
+                }
+
+                bool exited;
+                try { exited = p.HasExited; } catch { exited = false; }
+
+                if (exited)
+                {
+                    killed.Add(pid);
+                    WriteLogFile("info", "Watchdog", "Посторонний winws.exe PID " + pid + " завершён.");
+                }
+                else
+                {
+                    failed++;
+                    WriteLogFile("warn", "Watchdog", "Посторонний winws.exe PID " + pid
+                        + " не завершился" + (reason != null ? ": " + reason : " за 3 с") + ".");
+                }
+
+                try { p.Dispose(); } catch { }
+            }
+
+            SendToWeb(string.Format(
+                "{{\"type\":\"stale_winws_done\",\"found\":{0},\"killed\":{1},\"failed\":{2}," +
+                "\"pids\":[{3}],\"killedPids\":[{4}],\"ownPid\":{5},\"error\":\"\"}}",
+                found.Count, killed.Count, failed,
+                string.Join(",", found.ConvertAll(x => x.ToString()).ToArray()),
+                string.Join(",", killed.ConvertAll(x => x.ToString()).ToArray()),
+                mine));
+
+            // Проверка окружения показывает тот же список: без обновления пункт
+            // «Найдены посторонние winws.exe» продолжал бы висеть после очистки.
+            SendPreflight();
         }
 
         // =================================================================
@@ -2426,6 +2545,10 @@ namespace Zapret2App
                     {
                         SendPreflight();
                     }
+                    else if (rawMsg == "kill_stale_winws")
+                    {
+                        KillStaleWinws();
+                    }
                     else if (rawMsg == "autotune_cancel")
                     {
                         autotuneCancel = true;
@@ -2490,8 +2613,14 @@ namespace Zapret2App
                 });
                 trayMenu.MenuItems.Add("Очистить зависшие процессы WinDivert", (s, e) => {
                     StopZapretProcess();
-                    KillZombieWinDivert();
-                    trayIcon.ShowBalloonTip(1500, "Zapret2 Watchdog", "Процессы winws успешно очищены", ToolTipIcon.Info);
+                    // StopZapretProcess уже снял своё ядро, так что здесь
+                    // считаются только оставшиеся посторонние процессы.
+                    int gone = KillZombieWinDivert();
+                    trayIcon.ShowBalloonTip(1500, "Zapret2 Watchdog",
+                        gone > 0
+                            ? "Завершено процессов winws.exe: " + gone
+                            : "Обход остановлен, лишних процессов winws.exe не найдено",
+                        ToolTipIcon.Info);
                 });
                 trayMenu.MenuItems.Add("-");
                 trayMenu.MenuItems.Add("Выход", (s, e) => {

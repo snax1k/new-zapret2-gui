@@ -608,6 +608,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             });
           } else if (data.type === 'discord_scan') {
             setDiscordCache(Array.isArray(data.items) ? data.items : []);
+          } else if (data.type === 'stale_winws_done') {
+            setIsWatchdogClean(true);
+            // Пишем ровно то, что вернула нативная часть, и ничего сверх этого.
+            if (data.error) {
+              addLog('error', 'Watchdog: очистка не выполнена — ' + data.error, 'Watchdog');
+            } else {
+              const found: number = data.found || 0;
+              const killed: number = data.killed || 0;
+              const pids: number[] = Array.isArray(data.pids) ? data.pids : [];
+              const list = pids.length > 0 ? ` (PID ${pids.join(', ')})` : '';
+              if (found === 0) {
+                addLog('info', 'Watchdog: посторонних процессов winws.exe не найдено.', 'Watchdog');
+              } else if (killed === found) {
+                addLog('success',
+                  `Watchdog: найдено посторонних winws.exe — ${found}${list}, завершено — ${killed}.`,
+                  'Watchdog');
+              } else {
+                addLog('warn',
+                  `Watchdog: найдено — ${found}${list}, завершено — ${killed}, ` +
+                  `осталось — ${found - killed}. Подробности по каждому PID в zapret2.log.`,
+                  'Watchdog');
+              }
+            }
           } else if (data.type === 'discord_clean_done') {
             setIsDiscordCleaning(false);
           } else if (data.type === 'diagnostics_completed') {
@@ -1248,16 +1271,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
+  /**
+   * Просит нативную часть найти и снять посторонние процессы winws.exe.
+   *
+   * Итог в журнал пишет обработчик `stale_winws_done` — по числам, которые
+   * вернула нативная часть. Здесь не печатается ничего, кроме «ищу»: раньше
+   * отсюда уходил `stop_engine` (останавливает СВОЁ ядро, а не чужие
+   * процессы), а через 800 мс безусловно печаталось «все зависшие процессы
+   * очищены (taskkill /F /IM winws.exe выполнено)» — ни taskkill, ни проверки
+   * результата не было.
+   */
   const killZombieWinDivert = () => {
-    addLog('warn', 'Watchdog: Поиск и принудительное завершение зависших процессов winws.exe...', 'Watchdog');
-    setIsWatchdogClean(false);
-    if (window.chrome?.webview) {
-      window.chrome.webview.postMessage('stop_engine');
+    if (!window.chrome?.webview) {
+      addLog('error', 'Очистка процессов доступна только внутри приложения Zapret2.', 'Watchdog');
+      return;
     }
-    setTimeout(() => {
-      setIsWatchdogClean(true);
-      addLog('success', 'Watchdog: Все зависшие процессы очищены (taskkill /F /IM winws.exe выполнено)', 'Watchdog');
-    }, 800);
+    addLog('info', 'Watchdog: ищу посторонние процессы winws.exe...', 'Watchdog');
+    setIsWatchdogClean(false);
+    window.chrome.webview.postMessage('kill_stale_winws');
   };
 
   /**

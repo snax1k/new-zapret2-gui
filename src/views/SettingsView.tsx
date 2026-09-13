@@ -301,6 +301,15 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
 
+            <div>
+              <div className="font-semibold text-slate-800 dark:text-slate-200">Что делает кнопка</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                Снимает только посторонние winws.exe — те, которые запустило не это
+                приложение. Своё работающее ядро она не трогает, для него есть кнопка
+                питания. В журнал попадает результат: сколько нашли и сколько сняли.
+              </div>
+            </div>
+
             <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/5 text-[11px]">
               <span className="text-slate-500">Процесс ядра:</span>
               <span className={`font-mono font-bold ${

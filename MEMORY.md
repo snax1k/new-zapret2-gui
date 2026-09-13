@@ -162,6 +162,33 @@ QUIC-пакета**, потому что у Flowseal там их собстве�
 Теперь встроенные пресеты всегда берутся из сборки, а пользовательские
 (по id, которых нет в `INITIAL_PRESETS`) сохраняются.
 
+### После 0.2.0 — Watchdog писал «очищено», не проверив ничего
+
+`killZombieWinDivert` в `AppContext.tsx` отправляла `stop_engine` и через
+`setTimeout(800)` безусловно печатала в журнал
+«Все зависшие процессы очищены (taskkill /F /IM winws.exe выполнено)».
+
+Два вранья в одной строке: `stop_engine` останавливает **своё** ядро, а не
+чужие процессы, никакого `taskkill` не запускалось вообще; и результат никто
+не проверял — строка печаталась по таймеру.
+
+Починено отдельным сообщением `kill_stale_winws` → `KillStaleWinws()` в
+`NativeApp.cs`. Метод берёт тот же список, что и пункт «Найдены посторонние
+winws.exe» в `CollectPreflight` (`Process.GetProcessesByName("winws")` минус
+свой PID), снимает найденное, **проверяет `HasExited`** и отвечает
+`{"type":"stale_winws_done","found":N,"killed":M,...}`. Итоговую строку в
+журнал пишет интерфейс по этим числам: сколько нашли, сколько сняли, либо
+«посторонних процессов не найдено». Подробности по каждому PID — только в
+`zapret2.log` через `WriteLogFile`. В конце вызывается `SendPreflight()`,
+иначе пункт проверки окружения висел бы после успешной очистки.
+
+Заодно `KillZombieWinDivert()` (снимает **все** winws, включая своё ядро —
+старт, остановка, выход) возвращает число фактически завершённых, и подсказка
+в трее показывает его вместо «Процессы winws успешно очищены».
+
+Тот же класс, что плашка «100% УСПЕХ» в 0.1.3 и кнопка сворачивания в 0.1.4.
+Правило: интерфейс не сообщает о том, чего не проверял.
+
 ### Прочее, что чинилось по пути
 
 Выдуманная статистика и фиктивные результаты диагностики в интерфейсе,
@@ -579,9 +606,10 @@ try/catch, потому что подробное исключение `Invoke-R
   `minimize_to_tray`, `open_app_folder`, `open_logs_folder`, `save_lists:`,
   `export_hostlist:`, `import_hostlist`, `export_presets:` (base64),
   `import_presets`, `open_url:`, `start_engine:`, `stop_engine`,
-  `run_diagnostics`, `run_preflight`, `autotune:`, `autotune_cancel`,
-  `close`. Обратно в интерфейс, кроме `log`/`status_change`/`diag_step`:
-  `activity`, `preflight`, `autotune_step`, `autotune_result`, `autotune_done`.
+  `run_diagnostics`, `run_preflight`, `kill_stale_winws`, `autotune:`,
+  `autotune_cancel`, `close`. Обратно в интерфейс, кроме
+  `log`/`status_change`/`diag_step`: `activity`, `preflight`,
+  `stale_winws_done`, `autotune_step`, `autotune_result`, `autotune_done`.
 
 ---
 
