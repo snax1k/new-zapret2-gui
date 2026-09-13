@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.1.5";
+        public const string AppVersion = "0.2.0";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -824,6 +824,219 @@ namespace Zapret2App
                 if (logDir != null) Process.Start("explorer.exe", logDir);
             }
             catch { }
+        }
+
+
+        // =================================================================
+        //  Кэш Discord
+        //
+        //  Обход рвёт соединения посреди загрузки, Discord складывает в кэш
+        //  обрезанные ответы и продолжает показывать поломку уже после того,
+        //  как сеть починили. Отсюда кнопка «очистить».
+        //
+        //  Операция необратимая, поэтому правила жёсткие:
+        //
+        //  1. Удаляем строго по БЕЛОМУ списку каталогов. Заведёт Discord новую
+        //     папку — мы её не тронем. Обратный подход (чёрный список) рано или
+        //     поздно снесёт что-нибудь ценное.
+        //  2. Local Storage не трогаем НИКОГДА: там токен, удаление
+        //     разлогинивает. Ради экономии 20 МБ это плохая сделка.
+        //  3. %LOCALAPPDATA%\Discord (сам клиент, Squirrel, модули) не трогаем
+        //     вовсе: цена ошибки — переустановка с нуля.
+        //  4. Пока процесс жив, файлы заблокированы. Закрываем только по явной
+        //     команде пользователя, не молча.
+        //  5. Каждый удалённый путь пишется в журнал.
+        // =================================================================
+
+        /// <summary>Каталоги, которые можно удалять. Только точные имена и Dawn*Cache.</summary>
+        private static readonly string[] DiscordCacheDirs = new string[]
+        {
+            "Cache", "Code Cache", "GPUCache", "Service Worker", "logs"
+        };
+
+        /// <summary>Сборки Discord: имя каталога в %APPDATA% и имя процесса.</summary>
+        private static readonly string[][] DiscordFlavors = new string[][]
+        {
+            new string[] { "discord",            "Discord",            "Discord" },
+            new string[] { "discordptb",         "DiscordPTB",         "Discord PTB" },
+            new string[] { "discordcanary",      "DiscordCanary",      "Discord Canary" },
+            new string[] { "discorddevelopment", "DiscordDevelopment", "Discord Development" }
+        };
+
+        private static bool IsDiscordCacheDir(string name)
+        {
+            foreach (string d in DiscordCacheDirs)
+            {
+                if (string.Equals(name, d, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            // DawnCache, DawnGraphiteCache, DawnWebGPUCache — имена меняются от
+            // версии к версии, поэтому здесь шаблон, а не список.
+            return name.StartsWith("Dawn", StringComparison.OrdinalIgnoreCase)
+                && name.EndsWith("Cache", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static long DirectorySize(string path)
+        {
+            long total = 0;
+            try
+            {
+                foreach (string f in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    try { total += new FileInfo(f).Length; } catch { }
+                }
+            }
+            catch { }
+            return total;
+        }
+
+        /// <summary>Считает размер кэша каждой найденной сборки Discord и отдаёт в интерфейс.</summary>
+        private void SendDiscordScan()
+        {
+            var sb = new StringBuilder();
+            sb.Append("{\"type\":\"discord_scan\",\"items\":[");
+
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            bool first = true;
+
+            foreach (string[] flavor in DiscordFlavors)
+            {
+                string dir = Path.Combine(appData, flavor[0]);
+                if (!Directory.Exists(dir)) continue;
+
+                long size = 0;
+                int dirs = 0;
+                try
+                {
+                    foreach (string sub in Directory.GetDirectories(dir))
+                    {
+                        if (!IsDiscordCacheDir(Path.GetFileName(sub))) continue;
+                        size += DirectorySize(sub);
+                        dirs++;
+                    }
+                }
+                catch { }
+
+                bool running = false;
+                try { running = Process.GetProcessesByName(flavor[1]).Length > 0; }
+                catch { }
+
+                if (!first) sb.Append(",");
+                first = false;
+                sb.AppendFormat(
+                    "{{\"id\":\"{0}\",\"name\":\"{1}\",\"sizeBytes\":{2},\"dirs\":{3},\"running\":{4}}}",
+                    JsonEscape(flavor[0]), JsonEscape(flavor[2]), size, dirs,
+                    running ? "true" : "false");
+            }
+
+            sb.Append("]}");
+            SendToWeb(sb.ToString());
+        }
+
+        /// <summary>
+        /// Закрывает указанные сборки Discord и чистит их кэш.
+        /// </summary>
+        /// <param name="payload">
+        /// Идентификаторы каталогов через запятую и флаг закрытия:
+        /// <c>discord,discordptb|close</c>.
+        /// </param>
+        private void CleanDiscordCache(string payload)
+        {
+            string[] parts = payload.Split('|');
+            string[] ids = parts[0].Split(',');
+            bool closeFirst = parts.Length > 1 && parts[1] == "close";
+
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            long freed = 0;
+            int removed = 0;
+            var failed = new System.Collections.Generic.List<string>();
+
+            foreach (string rawId in ids)
+            {
+                string id = rawId.Trim();
+                string[] flavor = null;
+                foreach (string[] f in DiscordFlavors)
+                {
+                    if (string.Equals(f[0], id, StringComparison.OrdinalIgnoreCase)) { flavor = f; break; }
+                }
+                // Идентификатор пришёл из веб-слоя: сверяем со своим списком,
+                // чтобы «id» не превратился в произвольный путь.
+                if (flavor == null) continue;
+
+                if (closeFirst)
+                {
+                    try
+                    {
+                        Process[] procs = Process.GetProcessesByName(flavor[1]);
+                        if (procs.Length > 0)
+                        {
+                            SendLog("info", flavor[2] + ": закрываю, процессов — " + procs.Length + ".", "Discord");
+                            foreach (Process p in procs)
+                            {
+                                try { p.Kill(); } catch { }
+                            }
+                            foreach (Process p in procs)
+                            {
+                                // Файлы освобождаются не мгновенно после Kill.
+                                try { p.WaitForExit(5000); } catch { }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        SendLog("warn", flavor[2] + ": не удалось закрыть — " + ex.Message, "Discord");
+                    }
+                }
+
+                string dir = Path.Combine(appData, flavor[0]);
+                if (!Directory.Exists(dir)) continue;
+
+                foreach (string sub in Directory.GetDirectories(dir))
+                {
+                    string name = Path.GetFileName(sub);
+                    if (!IsDiscordCacheDir(name)) continue;
+
+                    long size = DirectorySize(sub);
+                    try
+                    {
+                        Directory.Delete(sub, true);
+                        freed += size;
+                        removed++;
+                        SendLog("info", "Удалено: " + sub + " (" + FormatSize(size) + ")", "Discord");
+                    }
+                    catch (Exception ex)
+                    {
+                        failed.Add(name);
+                        SendLog("warn", "Не удалось удалить " + sub + ": " + ex.Message, "Discord");
+                    }
+                }
+            }
+
+            if (failed.Count > 0)
+            {
+                SendLog("warn",
+                    "Часть каталогов занята и осталась на месте (" + string.Join(", ", failed.ToArray())
+                    + "). Обычно это значит, что Discord ещё не закрылся.", "Discord");
+            }
+
+            SendLog(removed > 0 ? "success" : "info",
+                removed > 0
+                    ? "Кэш Discord очищен: каталогов — " + removed + ", освобождено " + FormatSize(freed) + "."
+                    : "Удалять нечего: кэш уже пуст.",
+                "Discord");
+
+            SendToWeb(string.Format(
+                "{{\"type\":\"discord_clean_done\",\"freedBytes\":{0},\"removed\":{1},\"failed\":{2}}}",
+                freed, removed, failed.Count));
+
+            SendDiscordScan();
+        }
+
+        private static string FormatSize(long bytes)
+        {
+            if (bytes >= 1073741824L) return (bytes / 1073741824.0).ToString("0.0") + " ГБ";
+            if (bytes >= 1048576L) return (bytes / 1048576.0).ToString("0") + " МБ";
+            if (bytes >= 1024L) return (bytes / 1024.0).ToString("0") + " КБ";
+            return bytes + " Б";
         }
 
         /// <summary>
@@ -2196,6 +2409,14 @@ namespace Zapret2App
                     else if (rawMsg == "stop_engine")
                     {
                         StopZapretProcess();
+                    }
+                    else if (rawMsg == "discord_scan")
+                    {
+                        SendDiscordScan();
+                    }
+                    else if (rawMsg.StartsWith("discord_clean:"))
+                    {
+                        CleanDiscordCache(rawMsg.Substring("discord_clean:".Length));
                     }
                     else if (rawMsg == "run_diagnostics")
                     {

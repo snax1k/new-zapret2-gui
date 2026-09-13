@@ -87,6 +87,26 @@ export interface QuickToggleState {
   sitesStrategy: YoutubeStrategyId;
 }
 
+/**
+ * Одна найденная сборка Discord и размер её кэша.
+ *
+ * Размер считается только по каталогам из белого списка — тем, которые
+ * программа и правда удалит. Показывать общий размер папки было бы обманом:
+ * освободится меньше.
+ */
+export interface DiscordCacheItem {
+  /** Имя каталога в %APPDATA%: discord, discordptb, discordcanary, discorddevelopment. */
+  id: string;
+  /** Человеческое имя: Discord, Discord PTB и так далее. */
+  name: string;
+  /** Сколько занимают каталоги кэша. */
+  sizeBytes: number;
+  /** Сколько таких каталогов нашлось. */
+  dirs: number;
+  /** Запущен ли сейчас — пока процесс жив, файлы заблокированы. */
+  running: boolean;
+}
+
 /** Какой профиль настраивается: YouTube/Google или обычные сайты и Discord. */
 export type StrategyGroup = 'youtube' | 'sites';
 

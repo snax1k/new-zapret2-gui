@@ -19,11 +19,23 @@ import {
   HardDrive,
   Palette,
   Flame,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Eraser
 } from 'lucide-react';
 import { useApp, BUNDLED_CORE_VERSION } from '../context/AppContext';
 import { ACCENTS, BACKGROUNDS, buildSurfaceRamp } from '../lib/theme';
 import { CloseBehavior } from '../types';
+
+/**
+ * Размер в человеческом виде. Нативная часть шлёт байты, чтобы не решать
+ * за интерфейс, как их показывать.
+ */
+const formatSize = (bytes: number): string => {
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' ГБ';
+  if (bytes >= 1048576) return Math.round(bytes / 1048576) + ' МБ';
+  if (bytes >= 1024) return Math.round(bytes / 1024) + ' КБ';
+  return bytes + ' Б';
+};
 
 /** «2026-09-05, 14:31» вместо ISO-строки, которую читать невозможно. */
 const formatChecked = (iso: string): string => {
@@ -59,8 +71,18 @@ export const SettingsView: React.FC = () => {
     setCloseBehavior,
     killZombieWinDivert,
     openAppFolder,
-    isWatchdogClean
+    isWatchdogClean,
+    discordCache,
+    isDiscordCleaning,
+    scanDiscordCache,
+    cleanDiscordCache
   } = useApp();
+
+  // Удаление необратимо, поэтому кнопка срабатывает со второго нажатия:
+  // первое показывает, сколько именно будет удалено.
+  const [armed, setArmed] = useState(false);
+  const discordTotal = (discordCache || []).reduce((sum, i) => sum + i.sizeBytes, 0);
+  const discordRunning = (discordCache || []).some(i => i.running);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const [bgBusy, setBgBusy] = useState(false);
@@ -290,7 +312,120 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* 2. Storage & Release Location */}
+
+        {/* 2. Кэш Discord */}
+        <div className={`p-4 rounded-xl border space-y-3 ${
+          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
+        }`}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+              <Eraser className="w-4 h-4 text-amber-500" />
+              Кэш Discord
+            </span>
+            <button
+              onClick={scanDiscordCache}
+              disabled={isDiscordCleaning}
+              className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 disabled:opacity-50 text-[11px] font-bold text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10 transition-colors flex items-center gap-1.5"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isDiscordCleaning ? 'animate-spin' : ''}`} />
+              <span>Посчитать</span>
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            Обход рвёт соединения посреди загрузки, Discord складывает в кэш обрезанные
+            ответы и продолжает показывать поломку уже после того, как связь починили.
+            Помогает, когда Discord висит на «Starting» или не грузит картинки при
+            работающем обходе.
+          </p>
+
+          {discordCache === null && (
+            <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] text-slate-500 dark:text-slate-400">
+              Нажмите «Посчитать», чтобы узнать размер. Само по себе ничего не удаляется.
+            </div>
+          )}
+
+          {discordCache !== null && discordCache.length === 0 && (
+            <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] text-slate-500 dark:text-slate-400">
+              Discord на этом компьютере не найден — чистить нечего.
+            </div>
+          )}
+
+          {discordCache !== null && discordCache.length > 0 && (
+            <div className="space-y-2">
+              <div className="rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 divide-y divide-black/5 dark:divide-white/5">
+                {discordCache.map(item => (
+                  <div key={item.id} className="flex items-center justify-between px-3 py-2 text-[11px]">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{item.name}</span>
+                      {item.running && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-[9px] font-bold">
+                          запущен
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono text-slate-600 dark:text-slate-300 shrink-0">
+                      {formatSize(item.sizeBytes)}
+                      <span className="text-slate-400 dark:text-slate-500"> · {item.dirs} кат.</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] space-y-1">
+                <div className="text-slate-600 dark:text-slate-300">
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">Удаляется:</span>{' '}
+                  <span className="font-mono">Cache</span>, <span className="font-mono">Code Cache</span>,{' '}
+                  <span className="font-mono">GPUCache</span>, <span className="font-mono">Dawn*Cache</span>,{' '}
+                  <span className="font-mono">Service Worker</span>, <span className="font-mono">logs</span>.
+                </div>
+                <div className="text-slate-600 dark:text-slate-300">
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">Не трогаем:</span>{' '}
+                  <span className="font-mono">Local Storage</span> — там ваш вход в аккаунт.
+                  Разлогинить вас очистка не может. Сам клиент в{' '}
+                  <span className="font-mono">%LOCALAPPDATA%\Discord</span> тоже не трогается.
+                </div>
+              </div>
+
+              {discordRunning && (
+                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-300">
+                  Discord запущен. Пока процесс жив, файлы заблокированы — кнопка сначала
+                  закроет его. Несохранённое в чатах Discord не теряется, но звонок оборвётся.
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-3 pt-1">
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Освободится примерно <span className="font-mono font-bold text-slate-700 dark:text-slate-200">{formatSize(discordTotal)}</span>
+                </span>
+                <button
+                  onClick={() => {
+                    if (!armed) { setArmed(true); return; }
+                    setArmed(false);
+                    cleanDiscordCache(discordCache.map(i => i.id), discordRunning);
+                  }}
+                  disabled={isDiscordCleaning || discordTotal === 0}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
+                    armed
+                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
+                      : 'bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>
+                    {isDiscordCleaning
+                      ? 'Очищаю...'
+                      : armed
+                        ? `Точно удалить ${formatSize(discordTotal)}?`
+                        : discordRunning ? 'Закрыть Discord и очистить' : 'Очистить кэш'}
+                  </span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 3. Storage & Release Location */}
         <div className={`p-4 rounded-xl border space-y-3 ${
           theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
         }`}>

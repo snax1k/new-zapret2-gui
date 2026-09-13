@@ -15,6 +15,7 @@ import {
   QuickToggleBooleanKey,
   YoutubeStrategyId,
   StrategyGroup,
+  DiscordCacheItem,
   PreflightItem,
   AutotuneRow
 } from '../types';
@@ -34,7 +35,7 @@ import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccen
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.1.5';
+export const APP_VERSION = '0.2.0';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -317,6 +318,15 @@ interface AppContextType {
   killZombieWinDivert: () => void;
   openAppFolder: () => void;
   isWatchdogClean: boolean;
+
+  /** Найденные сборки Discord и размер их кэша. null — ещё не смотрели. */
+  discordCache: DiscordCacheItem[] | null;
+  /** Идёт удаление. */
+  isDiscordCleaning: boolean;
+  /** Пересчитать размеры. */
+  scanDiscordCache: () => void;
+  /** Удалить кэш у перечисленных сборок; closeFirst — сначала закрыть Discord. */
+  cleanDiscordCache: (ids: string[], closeFirst: boolean) => void;
   stats: {
     pid: number;
     uptimeSeconds: number;
@@ -412,6 +422,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [diagnostics, setDiagnostics] = useState<DiagnosticsItem[]>(INITIAL_DIAGNOSTICS);
   const [isDiagnosticsRunning, setIsDiagnosticsRunning] = useState(false);
   const [isWatchdogClean, setIsWatchdogClean] = useState(true);
+  const [discordCache, setDiscordCache] = useState<DiscordCacheItem[] | null>(null);
+  const [isDiscordCleaning, setIsDiscordCleaning] = useState(false);
 
   // GitHub Release update info & modal with persistent state
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
@@ -594,6 +606,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 }));
               return [...added, ...prev];
             });
+          } else if (data.type === 'discord_scan') {
+            setDiscordCache(Array.isArray(data.items) ? data.items : []);
+          } else if (data.type === 'discord_clean_done') {
+            setIsDiscordCleaning(false);
           } else if (data.type === 'diagnostics_completed') {
             setIsDiagnosticsRunning(false);
           }
@@ -1244,6 +1260,38 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }, 800);
   };
 
+  /**
+   * Спрашивает нативную часть, сколько занимает кэш Discord.
+   *
+   * Размер приходит только по каталогам из белого списка — по тем, которые
+   * программа действительно удаляет. Иначе обещали бы освободить больше,
+   * чем освободим.
+   */
+  const scanDiscordCache = () => {
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage('discord_scan');
+    } else {
+      // Вне приложения нативной части нет, и честнее показать пустой список,
+      // чем оставить интерфейс висеть в состоянии «считаю».
+      setDiscordCache([]);
+    }
+  };
+
+  const cleanDiscordCache = (ids: string[], closeFirst: boolean) => {
+    if (ids.length === 0) return;
+    if (!window.chrome?.webview) {
+      addLog('error', 'Очистка кэша недоступна: страница открыта вне приложения Zapret2.', 'Discord');
+      return;
+    }
+    setIsDiscordCleaning(true);
+    addLog('warn',
+      closeFirst
+        ? 'Закрываю Discord и очищаю кэш: ' + ids.join(', ')
+        : 'Очищаю кэш Discord: ' + ids.join(', '),
+      'Discord');
+    window.chrome.webview.postMessage('discord_clean:' + ids.join(',') + (closeFirst ? '|close' : ''));
+  };
+
   const openAppFolder = () => {
     if (window.chrome?.webview) {
       window.chrome.webview.postMessage('open_app_folder');
@@ -1323,6 +1371,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         killZombieWinDivert,
         openAppFolder,
         isWatchdogClean,
+        discordCache,
+        isDiscordCleaning,
+        scanDiscordCache,
+        cleanDiscordCache,
         stats,
         activeCommand
       }}

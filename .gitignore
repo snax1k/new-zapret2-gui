@@ -84,3 +84,9 @@ release-v0.1.1/
 release-v0.1.2/
 release-v0.1.3/
 release-v0.1.4/
+
+# Сами сборки в истории не нужны: файл раздаётся через GitHub Releases, а в
+# репозитории каждая версия оседает навсегда по 2,5 МБ. README.txt и
+# SHA256SUMS.txt рядом с ним остаются — из README.txt publish_release.ps1
+# берёт описание релиза.
+release-*/*.exe
