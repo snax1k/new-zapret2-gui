@@ -90,3 +90,7 @@ release-v0.1.4/
 # SHA256SUMS.txt рядом с ним остаются — из README.txt publish_release.ps1
 # берёт описание релиза.
 release-*/*.exe
+
+# Отчёт диагностики: содержит адреса и имена сайтов с машины
+# пользователя, в репозитории ему не место.
+scripts/diag/claude-info.txt
