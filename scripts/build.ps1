@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.2.2"
+    [string]$Version = "0.2.3"
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,12 +62,36 @@ Compress-Archive -Path "dist\*" -DestinationPath "dist.zip" -CompressionLevel Op
 if (Test-Path "bin.zip") { Remove-Item "bin.zip" -Force }
 # В архив попадают только файлы верхнего уровня bin\ (winws.exe, WinDivert,
 # .bin-пейлоады). Вложенные каталоги с примерами не нужны.
-$binFiles = Get-ChildItem "bin" -File | ForEach-Object { $_.FullName }
+#
+# Отсев мусора из поставки zapret. Всё перечисленное на Windows x64 не
+# используется ни ядром, ни нами, но лежало внутри каждого exe и на диске у
+# каждого пользователя — около 340 КБ:
+#
+#   *.plist            файл автозапуска macOS
+#   *.service, *.timer юниты systemd
+#   *.h                заголовки C для сборки из исходников
+#   WinDivert32.sys    драйвер под 32-битные процессы, сборка только x64
+#   ip2net, mdig, killall  утилиты zapret, которые наш код не вызывает
+#
+# Список чёрный, а не белый, намеренно: если в следующей версии ядра появится
+# новый нужный файл, он попадёт в сборку сам, а не потеряется молча.
+$binJunk = @('*.plist', '*.service', '*.timer', '*.h', 'WinDivert32.sys',
+             'ip2net.exe', 'mdig.exe', 'killall.exe')
+$binAll = Get-ChildItem "bin" -File
+$binFiles = $binAll | Where-Object {
+    $name = $_.Name
+    -not ($binJunk | Where-Object { $name -like $_ })
+} | ForEach-Object { $_.FullName }
+
+$skipped = $binAll.Count - $binFiles.Count
+$savedKb = [int](($binAll | Where-Object { $_.FullName -notin $binFiles } | Measure-Object Length -Sum).Sum / 1KB)
+Write-Host "   в bin.zip: $($binFiles.Count) файлов, отсеяно лишних: $skipped ($savedKb КБ)" -ForegroundColor DarkGray
+
 Compress-Archive -Path $binFiles -DestinationPath "bin.zip" -CompressionLevel Optimal
 
-# Списки доменов лежат отдельно от ядра: bin\ перезаписывается целиком при
-# каждом запуске, а в host-list\ рядом с поставляемыми списками живут
-# пользовательские файлы, которые затирать нельзя.
+# Списки доменов лежат отдельно от ядра: bin\ и dist\ приложение сносит и
+# раскладывает заново при смене версии, а в host-list\ рядом с поставляемыми
+# списками живут пользовательские файлы, которые затирать нельзя.
 if (Test-Path "lists.zip") { Remove-Item "lists.zip" -Force }
 $listFiles = Get-ChildItem "host-list" -File | Where-Object { $_.Name -notlike "*-user.txt" } | ForEach-Object { $_.FullName }
 Compress-Archive -Path $listFiles -DestinationPath "lists.zip" -CompressionLevel Optimal

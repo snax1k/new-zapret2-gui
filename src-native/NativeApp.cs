@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.2.2";
+        public const string AppVersion = "0.2.3";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -303,6 +303,102 @@ namespace Zapret2App
             base.WndProc(ref m);
         }
 
+
+        /// <summary>Имя файла-маркера с версией, которая разложила bin и dist.</summary>
+        private const string UnpackMarkerName = "unpacked-version.txt";
+
+        /// <summary>
+        /// Сносит каталог целиком. Возвращает true, если после вызова от него
+        /// ничего не осталось.
+        /// </summary>
+        /// <remarks>
+        /// Если снести разом не вышло (файл занят), удаляем по одному: частичная
+        /// уборка лучше, чем никакой. Но про неудачу сообщаем честно — по
+        /// возвращённому значению решается, записывать ли маркер, а значит
+        /// повторится ли попытка при следующем запуске.
+        /// </remarks>
+        private bool PurgeDirectory(string path)
+        {
+            if (!Directory.Exists(path)) return true;
+
+            try
+            {
+                Directory.Delete(path, true);
+                return true;
+            }
+            catch { }
+
+            int failed = 0;
+            try
+            {
+                foreach (string f in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
+                {
+                    try { File.Delete(f); }
+                    catch { failed++; SendLog("warn", "Не удалось удалить файл прошлой версии: " + f, "Setup"); }
+                }
+                if (failed == 0)
+                {
+                    try { Directory.Delete(path, true); } catch { }
+                    return !Directory.Exists(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                SendLog("warn", "Уборка каталога " + path + " прервана: " + ex.Message, "Setup");
+                return false;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Удаляет файлы прошлых версий перед распаковкой.
+        /// </summary>
+        /// <remarks>
+        /// Распаковка перезаписывает файлы по имени и не удаляет ничего. Из-за
+        /// этого на диске копилось всё, что мы когда-либо поставляли: имя
+        /// сборки интерфейса содержит хэш содержимого (index-D2Ys9Scj.js), и
+        /// каждая версия оставляла прежнюю лежать — по полмегабайта на выпуск.
+        /// Так же оставались списки, которые мы перестали поставлять
+        /// (ipset-telegram.txt после 0.1.5).
+        ///
+        /// Но вес — не главное. Ошибки распаковки проглатываются молча, и при
+        /// занятом файле получалась смесь версий: новый index.html и старые
+        /// assets рядом, то есть белое окно без единого сообщения. Снос
+        /// каталога целиком убирает и этот случай.
+        ///
+        /// Трогаются только каталоги, которые мы раскладываем сами. host-list
+        /// с доменами пользователя, settings.json и журналы не трогаются.
+        ///
+        /// Чужие winws снимаются в Main до создания формы, поэтому к моменту
+        /// уборки bin\ никем не занят.
+        /// </remarks>
+        private bool PurgePreviousVersion(string baseDir)
+        {
+            string markerPath = Path.Combine(baseDir, UnpackMarkerName);
+
+            string unpacked = null;
+            try
+            {
+                if (File.Exists(markerPath)) unpacked = File.ReadAllText(markerPath).Trim();
+            }
+            catch { }
+
+            if (unpacked == AppVersion) return false;
+
+            bool first = string.IsNullOrEmpty(unpacked) && !Directory.Exists(distPath);
+            if (!first)
+            {
+                SendLog("info",
+                    "Версия сменилась (" + (string.IsNullOrEmpty(unpacked) ? "неизвестно" : unpacked)
+                    + " -> " + AppVersion + "), удаляю файлы прошлой версии.", "Setup");
+            }
+
+            // & вместо &&: второй каталог должен быть убран независимо от того,
+            // что случилось с первым.
+            return PurgeDirectory(distPath) & PurgeDirectory(binPath);
+        }
+
         private void ExtractResources()
         {
             try
@@ -311,6 +407,8 @@ namespace Zapret2App
                 distPath = Path.Combine(baseDir, "dist");
                 binPath = Path.Combine(baseDir, "bin");
                 listsPath = Path.Combine(baseDir, "host-list");
+
+                bool purged = PurgePreviousVersion(baseDir);
 
                 if (!Directory.Exists(distPath)) Directory.CreateDirectory(distPath);
                 if (!Directory.Exists(binPath)) Directory.CreateDirectory(binPath);
@@ -368,6 +466,15 @@ namespace Zapret2App
                             }
                         }
                     }
+                }
+                // Маркер пишется только если уборка прошла без остатка. Иначе
+                // версия в нём останется прежней, и при следующем запуске мы
+                // попробуем убрать снова — к тому времени занятый файл,
+                // скорее всего, освободится.
+                if (purged)
+                {
+                    try { File.WriteAllText(Path.Combine(baseDir, UnpackMarkerName), AppVersion); }
+                    catch (Exception ex) { SendLog("warn", "Не удалось записать маркер версии: " + ex.Message, "Setup"); }
                 }
             }
             catch (Exception ex)
