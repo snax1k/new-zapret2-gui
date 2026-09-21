@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldCheck, AlertTriangle, XCircle, ChevronDown, RefreshCw } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { loadSetting, saveSetting } from '../lib/settings';
 
 /**
  * Предполётная проверка окружения.
@@ -19,12 +20,12 @@ const COLLAPSED_KEY = 'zapret2_preflight_collapsed_v1';
 export const PreflightPanel: React.FC = () => {
   const { preflight, runPreflight, theme } = useApp();
   const [collapsed, setCollapsedState] = useState<boolean>(
-    () => localStorage.getItem(COLLAPSED_KEY) === '1'
+    () => loadSetting(COLLAPSED_KEY) === '1'
   );
   const [showAll, setShowAll] = useState(false);
 
   const setCollapsed = (v: boolean) => {
-    localStorage.setItem(COLLAPSED_KEY, v ? '1' : '0');
+    saveSetting(COLLAPSED_KEY, v ? '1' : '0');
     setCollapsedState(v);
   };
 

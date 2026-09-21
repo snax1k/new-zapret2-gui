@@ -27,6 +27,7 @@ import {
   YOUTUBE_STRATEGIES
 } from '../lib/zapretCommand';
 import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
+import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 
 // Домены, к которым применяется обход. Хостлист-файл list-general.txt лежит
 // рядом с winws.exe (рабочий каталог процесса), поэтому путь указывается
@@ -35,7 +36,7 @@ import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccen
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.2.1';
+export const APP_VERSION = '0.2.2';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -363,47 +364,47 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [status, setStatus] = useState<AppStatus>('disconnected');
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [theme, setTheme] = useState<ThemeMode>(
-    () => (localStorage.getItem('zapret2_theme_v5') as ThemeMode) || 'dark'
+    () => (loadSetting('zapret2_theme_v5') as ThemeMode) || 'dark'
   );
   const [accent, setAccentState] = useState<string>(
-    () => localStorage.getItem(THEME_ACCENT_KEY) || 'indigo'
+    () => loadSetting(THEME_ACCENT_KEY) || 'indigo'
   );
   const [background, setBackgroundState] = useState<string>(
-    () => localStorage.getItem(THEME_BG_KEY) || 'slate'
+    () => loadSetting(THEME_BG_KEY) || 'slate'
   );
   const [customBackground, setCustomBackgroundState] = useState<string>(
-    () => localStorage.getItem(THEME_IMAGE_KEY) || ''
+    () => loadSetting(THEME_IMAGE_KEY) || ''
   );
   const [customTint, setCustomTint] = useState<{ hue: number; sat: number }>(() => {
     try {
-      const raw = localStorage.getItem(THEME_TINT_KEY);
+      const raw = loadSetting(THEME_TINT_KEY);
       if (raw) return JSON.parse(raw);
     } catch { }
     return { hue: 217, sat: 1 };
   });
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(
-    () => (localStorage.getItem('zapret2_close_v5') as CloseBehavior) || 'minimize_to_tray'
+    () => (loadSetting('zapret2_close_v5') as CloseBehavior) || 'minimize_to_tray'
   );
   const setCloseBehavior = (b: CloseBehavior) => {
-    localStorage.setItem('zapret2_close_v5', b);
+    saveSetting('zapret2_close_v5', b);
     setCloseBehaviorState(b);
   };
   // По умолчанию включено, но выключить можно: запрос к GitHub при каждом
   // запуске — не то, что стоит навязывать без спроса.
   const [autoCheckUpdates, setAutoCheckUpdatesState] = useState<boolean>(
-    () => localStorage.getItem(UPDATE_AUTO_KEY) !== 'off'
+    () => loadSetting(UPDATE_AUTO_KEY) !== 'off'
   );
   const setAutoCheckUpdates = (v: boolean) => {
-    localStorage.setItem(UPDATE_AUTO_KEY, v ? 'on' : 'off');
+    saveSetting(UPDATE_AUTO_KEY, v ? 'on' : 'off');
     setAutoCheckUpdatesState(v);
   };
   const [showTrayToast, setShowTrayToast] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string>(
-    () => localStorage.getItem('zapret2_active_preset_v5') || 'general-v72'
+    () => loadSetting('zapret2_active_preset_v5') || 'general-v72'
   );
 
   const [presets, setPresets] = useState<Preset[]>(() => {
-    const saved = localStorage.getItem('zapret2_presets_v6');
+    const saved = loadSetting('zapret2_presets_v6');
     if (!saved) return INITIAL_PRESETS;
 
     try {
@@ -411,7 +412,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const builtinIds = new Set(INITIAL_PRESETS.map(p => p.id));
       const custom = stored.filter(p => !builtinIds.has(p.id));
       const storedBuiltins = stored.filter(p => builtinIds.has(p.id));
-      const sameBuild = localStorage.getItem(BUILTIN_SIG_KEY) === BUILTIN_SIGNATURE;
+      const sameBuild = loadSetting(BUILTIN_SIG_KEY) === BUILTIN_SIGNATURE;
 
       if (sameBuild) {
         // Сборка та же — значит всё, что отличается от эталона, правил
@@ -451,7 +452,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [isCreatePresetModalOpen, setIsCreatePresetModalOpen] = useState(false);
   const [quickToggles, setQuickToggles] = useState<QuickToggleState>(() => {
-    const saved = localStorage.getItem('zapret2_toggles_v5');
+    const saved = loadSetting('zapret2_toggles_v5');
     if (saved) {
       try { return { ...DEFAULT_TOGGLES, ...JSON.parse(saved) }; } catch { }
     }
@@ -460,7 +461,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [engineMode, setEngineMode] = useState<EngineMode>('windivert');
   const [hostlists, setHostlists] = useState<HostlistItem[]>(() => {
-    const saved = localStorage.getItem('zapret2_hostlists_v5');
+    const saved = loadSetting('zapret2_hostlists_v5');
     if (saved) {
       try { return JSON.parse(saved); } catch { }
     }
@@ -491,7 +492,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     assetSha256: '',
     assetSumsUrl: '',
     error: '',
-    lastCheckedAt: localStorage.getItem(UPDATE_CHECK_KEY) || ''
+    lastCheckedAt: loadSetting(UPDATE_CHECK_KEY) || ''
   });
 
 
@@ -700,14 +701,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // видно, отличается ли сохранённый встроенный пресет из-за правок
   // пользователя или из-за того, что мы выпустили новый.
   useEffect(() => {
-    localStorage.setItem('zapret2_presets_v6', JSON.stringify(presets));
-    localStorage.setItem(BUILTIN_SIG_KEY, BUILTIN_SIGNATURE);
+    saveSetting('zapret2_presets_v6', JSON.stringify(presets));
+    saveSetting(BUILTIN_SIG_KEY, BUILTIN_SIGNATURE);
   }, [presets]);
 
   const activePreset = presets.find(p => p.id === activePresetId) || presets[0];
 
   useEffect(() => {
-    localStorage.setItem('zapret2_active_preset_v5', activePresetId);
+    saveSetting('zapret2_active_preset_v5', activePresetId);
   }, [activePresetId]);
 
   const activeCommand = buildPresetCommand(activePreset, quickToggles);
@@ -773,21 +774,21 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const setAccent = (id: string) => {
-    localStorage.setItem(THEME_ACCENT_KEY, id);
+    saveSetting(THEME_ACCENT_KEY, id);
     setAccentState(id);
   };
 
   // Смена фона тянет за собой акцент: у каждого фона есть тот, что к нему
   // подходит. Иначе «Багрянец» с индиговыми кнопками выглядит случайностью.
   const setBackground = (id: string) => {
-    localStorage.setItem(THEME_BG_KEY, id);
+    saveSetting(THEME_BG_KEY, id);
     setBackgroundState(id);
     const def = getBackground(id);
-    localStorage.setItem(THEME_ACCENT_KEY, def.accent);
+    saveSetting(THEME_ACCENT_KEY, def.accent);
     setAccentState(def.accent);
     // Пресет и картинка — взаимоисключающие: выбрали пресет, картинка уходит.
     if (customBackground) {
-      localStorage.removeItem(THEME_IMAGE_KEY);
+      removeSetting(THEME_IMAGE_KEY);
       setCustomBackgroundState('');
     }
   };
@@ -797,8 +798,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const dataUrl = await shrinkImage(file);
       const tint = await averageHueOfImage(dataUrl);
       try {
-        localStorage.setItem(THEME_IMAGE_KEY, dataUrl);
-        localStorage.setItem(THEME_TINT_KEY, JSON.stringify(tint));
+        saveSetting(THEME_IMAGE_KEY, dataUrl);
+        saveSetting(THEME_TINT_KEY, JSON.stringify(tint));
       } catch {
         // Картинка может не влезть в localStorage — она там не одна.
         addLog('warn', 'Фон применён, но не сохранится до следующего запуска: не хватило места в хранилище.', 'Theme');
@@ -809,7 +810,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       // Акцент подтягиваем к тону картинки — иначе оранжевый фон с изумрудными
       // кнопками выглядит так, будто фон подставили случайно.
       const suggested = nearestAccent(tint.hue);
-      localStorage.setItem(THEME_ACCENT_KEY, suggested);
+      saveSetting(THEME_ACCENT_KEY, suggested);
       setAccentState(suggested);
 
       addLog('success', `Фон заменён на изображение, тон интерфейса подобран по нему (${tint.hue}°).`, 'Theme');
@@ -819,8 +820,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const clearCustomBackground = () => {
-    localStorage.removeItem(THEME_IMAGE_KEY);
-    localStorage.removeItem(THEME_TINT_KEY);
+    removeSetting(THEME_IMAGE_KEY);
+    removeSetting(THEME_TINT_KEY);
     setCustomBackgroundState('');
   };
 
@@ -836,7 +837,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       customHue: customTint.hue,
       customSat: customTint.sat
     });
-    localStorage.setItem('zapret2_theme_v5', theme);
+    saveSetting('zapret2_theme_v5', theme);
   }, [theme, accent, background, customBackground, customTint]);
 
   const addLog = (level: LogEntry['level'], message: string, source: string = 'Core') => {
@@ -923,7 +924,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   /** Сохраняет переключатели и, если ядро запущено, перезапускает его. */
   const applyToggles = (next: QuickToggleState, message: string) => {
-    localStorage.setItem('zapret2_toggles_v5', JSON.stringify(next));
+    saveSetting('zapret2_toggles_v5', JSON.stringify(next));
     addLog('info', message, 'Settings');
     if (status === 'connected' && window.chrome?.webview) {
       addLog('info', 'Перезапуск ядра с новыми параметрами...', 'Runner');
@@ -1057,7 +1058,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   useEffect(() => {
-    localStorage.setItem('zapret2_hostlists_v5', JSON.stringify(hostlists));
+    saveSetting('zapret2_hostlists_v5', JSON.stringify(hostlists));
   }, [hostlists]);
 
   /** Сериализует списки в формат, который понимает нативный хост. */
@@ -1223,7 +1224,7 @@ const parseReleaseHighlights = (body: string): string[] => {
       const data = await resp.json();
       // Время удачного ответа: по нему считается, пора ли спрашивать снова.
       const checkedAt = new Date().toISOString();
-      localStorage.setItem(UPDATE_CHECK_KEY, checkedAt);
+      saveSetting(UPDATE_CHECK_KEY, checkedAt);
       const latest: string = String(data.tag_name || '').replace(/^v/i, '');
       const hasUpdate = !!latest && compareVersions(latest, APP_VERSION) > 0;
 
@@ -1311,7 +1312,7 @@ const parseReleaseHighlights = (body: string): string[] => {
   useEffect(() => {
     if (!autoCheckUpdates) return;
 
-    const last = localStorage.getItem(UPDATE_CHECK_KEY);
+    const last = loadSetting(UPDATE_CHECK_KEY);
     if (last) {
       const age = Date.now() - new Date(last).getTime();
       // NaN даёт false и проверку не блокирует — это верное поведение

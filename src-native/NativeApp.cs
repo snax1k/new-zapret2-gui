@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.2.1";
+        public const string AppVersion = "0.2.2";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -454,6 +454,12 @@ namespace Zapret2App
                 var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
                 await webView.EnsureCoreWebView2Async(env);
 
+                // Настройки должны оказаться на странице РАНЬШЕ её скриптов,
+                // иначе интерфейс успеет прочитать пустоту и записать поверх
+                // файла значения по умолчанию.
+                await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+                    "window.__zapret_settings = " + LoadSettingsJson() + ";");
+
                 webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     "app.zapret",
                     distPath,
@@ -824,6 +830,84 @@ namespace Zapret2App
                 {
                     SendLog("error", "Ошибка импорта пресетов: " + ex.Message, "Presets");
                 }
+            }
+        }
+
+
+        // =================================================================
+        //  Настройки приложения
+        //
+        //  Хранилище браузера пишет на диск с задержкой: изменения копятся в
+        //  памяти и сбрасываются пачкой через несколько секунд простоя либо
+        //  при аккуратном закрытии движка. Приложение закрывалось через
+        //  Application.Exit(), не дав WebView2 закрыться, и процесс браузера
+        //  убивался вместе с нашим — всё, что пользователь поменял за
+        //  секунды до выхода, пропадало. Выглядело это как «пресет не
+        //  запоминается».
+        //
+        //  Поэтому настройки живут в обычном файле, который пишется
+        //  синхронно, сразу при изменении. Страница получает его содержимое
+        //  ДО загрузки, так что гонки «что прочитается раньше» нет.
+        // =================================================================
+
+        /// <summary>Путь к settings.json рядом с каталогом логов.</summary>
+        private string SettingsFilePath()
+        {
+            string root = Path.GetDirectoryName(logDir); // %LOCALAPPDATA%\Zapret2-GUI
+            if (string.IsNullOrEmpty(root))
+                root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zapret2-GUI");
+            return Path.Combine(root, "settings.json");
+        }
+
+        /// <summary>
+        /// Читает настройки. Всегда возвращает корректное выражение JavaScript:
+        /// при любой беде — пустой объект, чтобы страница не падала на разборе.
+        /// </summary>
+        private string LoadSettingsJson()
+        {
+            try
+            {
+                string path = SettingsFilePath();
+                if (!File.Exists(path)) return "{}";
+
+                string text = File.ReadAllText(path, Encoding.UTF8).Trim();
+                if (text.Length == 0 || text[0] != '{') return "{}";
+
+                // Завершающий ноль и прочий мусор ломают JSON.parse, а файл мы
+                // пишем сами — значит испортить его мог только сбой записи.
+                if (text.IndexOf('\0') >= 0) return "{}";
+                return text;
+            }
+            catch (Exception ex)
+            {
+                SendLog("warn", "Не удалось прочитать settings.json: " + ex.Message, "Settings");
+                return "{}";
+            }
+        }
+
+        /// <summary>
+        /// Записывает настройки. Сначала во временный файл, затем подменой —
+        /// иначе сбой посреди записи оставил бы обрезанный файл и человек
+        /// потерял бы все настройки сразу, а не последнее изменение.
+        /// </summary>
+        private void SaveSettingsJson(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return;
+            try
+            {
+                string path = SettingsFilePath();
+                string dir = Path.GetDirectoryName(path);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+
+                string tmp = path + ".tmp";
+                File.WriteAllText(tmp, json, new UTF8Encoding(false));
+
+                if (File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
+            }
+            catch (Exception ex)
+            {
+                SendLog("warn", "Не удалось сохранить settings.json: " + ex.Message, "Settings");
             }
         }
 
@@ -2710,6 +2794,10 @@ namespace Zapret2App
                     {
                         StopZapretProcess();
                     }
+                    else if (rawMsg.StartsWith("save_settings:"))
+                    {
+                        SaveSettingsJson(rawMsg.Substring("save_settings:".Length));
+                    }
                     else if (rawMsg == "discord_scan")
                     {
                         SendDiscordScan();
@@ -2745,6 +2833,11 @@ namespace Zapret2App
                     else if (rawMsg == "close")
                     {
                         isExiting = true;
+                        // WebView2 закрываем явно: иначе движок убивают вместе
+                        // с процессом, и его отложенные записи на диск
+                        // пропадают. Настройки мы теперь храним сами, но
+                        // терять чужие данные молча всё равно неправильно.
+                        try { if (webView != null) webView.Dispose(); } catch { }
                         StopZapretProcess();
                         KillZombieWinDivert();
                         ShutdownLogging();

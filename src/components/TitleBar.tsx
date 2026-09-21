@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Shield, Minus, Square, Copy, X, Cpu, Sun, Moon, Flame, Lock } from 'lucide-react';
 import { useApp, APP_VERSION } from '../context/AppContext';
+import { flushSettings } from '../lib/settings';
 
 export const TitleBar: React.FC = () => {
   const {
@@ -79,6 +80,9 @@ export const TitleBar: React.FC = () => {
     } else {
       addLog('warn', 'Закрытие приложения. Выгрузка процессов WinDivert...', 'Core');
       if (window.chrome?.webview) {
+        // Отправка настроек отложена на 150 мс, а закрытие — мгновенное:
+        // без этого последнее изменение перед выходом не успевало уйти.
+        flushSettings();
         window.chrome.webview.postMessage('close');
       } else {
         window.close();
