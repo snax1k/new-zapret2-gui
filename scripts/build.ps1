@@ -141,6 +141,8 @@ $cscArgs = @(
     "/reference:System.Windows.Forms.dll",
     "/reference:System.IO.Compression.dll",
     "/reference:System.IO.Compression.FileSystem.dll",
+    # ServiceController: выгрузка драйвера WinDivert при полном выходе
+    "/reference:System.ServiceProcess.dll",
     # Ресурсы читаются по этим именам в NativeApp.cs — переименовывать нельзя.
     "/resource:dist.zip,dist.zip",
     "/resource:bin.zip,bin.zip",

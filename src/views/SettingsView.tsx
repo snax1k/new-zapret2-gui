@@ -603,7 +603,9 @@ export const SettingsView: React.FC = () => {
                 {closeBehavior === 'exit_app' && <Check className="w-3.5 h-3.5 text-rose-500" />}
               </div>
               <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Завершать все процессы winws.exe, выгружать WinDivert и полностью закрывать приложение.
+                Завершать все процессы winws.exe и полностью закрывать приложение.
+                Драйвер WinDivert при этом тоже выгружается — если им не пользуется
+                другая программа. На работу сети выгрузка не влияет.
               </p>
             </div>
           </div>

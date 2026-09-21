@@ -11,6 +11,7 @@ using System.Runtime.InteropServices;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
+using System.ServiceProcess;
 using System.Text.RegularExpressions;
 using System.Text;
 using System.Threading;
@@ -308,12 +309,39 @@ namespace Zapret2App
         private const string UnpackMarkerName = "unpacked-version.txt";
 
         /// <summary>
-        /// Сносит каталог целиком. Возвращает true, если после вызова от него
-        /// ничего не осталось.
+        /// Файлы, которые заняты САМОЙ ПРОГРАММОЙ и потому не удаляются.
         /// </summary>
         /// <remarks>
-        /// Если снести разом не вышло (файл занят), удаляем по одному: частичная
-        /// уборка лучше, чем никакой. Но про неудачу сообщаем честно — по
+        /// Это не остатки прошлой версии, и считать их неудачей уборки нельзя.
+        ///
+        /// WebView2Loader.dll программа записывает и загружает в память в
+        /// Main, до создания формы — то есть до уборки, и держит до выхода.
+        /// WinDivert64.sys держит загруженный драйвер.
+        ///
+        /// Оба заняты ВСЕГДА, поэтому без этого списка маркер версии не
+        /// записывался бы никогда, и уборка с полной перераспаковкой
+        /// повторялась бы при каждом запуске.
+        /// </remarks>
+        private static readonly string[] PurgeKeepBusy = new string[]
+        {
+            "WebView2Loader.dll",
+            "WinDivert64.sys"
+        };
+
+        private static bool IsBusyByUs(string fileName)
+        {
+            foreach (string n in PurgeKeepBusy)
+                if (string.Equals(fileName, n, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// Сносит каталог. Возвращает true, если не осталось ничего, кроме
+        /// файлов, занятых самой программой.
+        /// </summary>
+        /// <remarks>
+        /// Если снести разом не вышло, удаляем по одному: частичная уборка
+        /// лучше, чем никакой. Про настоящие неудачи сообщаем честно — по
         /// возвращённому значению решается, записывать ли маркер, а значит
         /// повторится ли попытка при следующем запуске.
         /// </remarks>
@@ -334,12 +362,18 @@ namespace Zapret2App
                 foreach (string f in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
                 {
                     try { File.Delete(f); }
-                    catch { failed++; SendLog("warn", "Не удалось удалить файл прошлой версии: " + f, "Setup"); }
+                    catch
+                    {
+                        if (IsBusyByUs(Path.GetFileName(f))) continue;
+                        failed++;
+                        SendLog("warn", "Не удалось удалить файл прошлой версии: " + f, "Setup");
+                    }
                 }
                 if (failed == 0)
                 {
+                    // Каталог мог остаться из-за занятых файлов — это не ошибка.
                     try { Directory.Delete(path, true); } catch { }
-                    return !Directory.Exists(path);
+                    return true;
                 }
             }
             catch (Exception ex)
@@ -1963,6 +1997,55 @@ namespace Zapret2App
             return null;
         }
 
+
+        /// <summary>
+        /// Пробует выгрузить драйвер WinDivert при полном выходе.
+        /// </summary>
+        /// <remarks>
+        /// Только stop, БЕЗ delete. Разница принципиальная: WinDivert —
+        /// общая инфраструктура, его используют некоторые VPN, ускорители игр
+        /// и антивирусы. Остановку Windows не выполнит, если у драйвера есть
+        /// открытые дескрипторы, — то есть чужую работу мы сломать не можем,
+        /// команда просто вернёт ошибку. А вот delete снимает регистрацию
+        /// службы и способен помешать соседу, поэтому здесь его нет; он
+        /// остаётся только в аварийном ResetWinDivertService.
+        ///
+        /// На трафик выгрузка не влияет: фильтры WinDivert живут вместе с
+        /// дескриптором winws и снимаются в момент его завершения. К этому
+        /// вызову драйвер уже ничего не перехватывает.
+        /// </remarks>
+        private void TryStopWinDivertService()
+        {
+            foreach (string service in new string[] { "WinDivert", "windivert", "WinDivert14" })
+            {
+                try
+                {
+                    using (var sc = new ServiceController(service))
+                    {
+                        // Обращение к Status бросает исключение, если службы нет.
+                        if (sc.Status == ServiceControllerStatus.Stopped) continue;
+
+                        sc.Stop();
+                        sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(3));
+                        SendLog("info", "Драйвер WinDivert выгружен (служба " + service + ").", "WinDivert");
+                        return;
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Службы с таким именем нет — пробуем следующее имя.
+                }
+                catch (Exception ex)
+                {
+                    SendLog("info",
+                        "Драйвер WinDivert остался загруженным: " + ex.Message +
+                        ". Обычно это значит, что им пользуется другая программа. На работу сети это не влияет.",
+                        "WinDivert");
+                    return;
+                }
+            }
+        }
+
         /// <summary>
         /// Снимает подвисший драйвер WinDivert. Нужен, когда после аварийного
         /// завершения winws в системе остаётся служба со старой версией драйвера,
@@ -2947,6 +3030,7 @@ namespace Zapret2App
                         try { if (webView != null) webView.Dispose(); } catch { }
                         StopZapretProcess();
                         KillZombieWinDivert();
+                        TryStopWinDivertService();
                         ShutdownLogging();
                         if (trayIcon != null)
                         {
@@ -3008,6 +3092,7 @@ namespace Zapret2App
                     isExiting = true;
                     StopZapretProcess();
                     KillZombieWinDivert();
+                    TryStopWinDivertService();
                     ShutdownLogging();
                     if (trayIcon != null)
                     {
@@ -3051,6 +3136,7 @@ namespace Zapret2App
             {
                 StopZapretProcess();
                 KillZombieWinDivert();
+                TryStopWinDivertService();
                 ShutdownLogging();
                 if (trayIcon != null)
                 {
