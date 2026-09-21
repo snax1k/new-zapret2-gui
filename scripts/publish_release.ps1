@@ -56,7 +56,12 @@ if ($env:GITHUB_TOKEN) {
     $token = $env:GITHUB_TOKEN
     $tokenSource = "переменная окружения GITHUB_TOKEN"
 } else {
-    $tokenPath = Join-Path $env:LOCALAPPDATA "Zapret2-GUI\release-token.xml"
+    # Сначала отдельный каталог, потом прежнее место рядом с данными
+    # приложения: там токен попадал под чистку и однажды пропал.
+    $tokenPath = Join-Path $env:LOCALAPPDATA "Zapret2-Release\release-token.xml"
+    if (-not (Test-Path $tokenPath)) {
+        $tokenPath = Join-Path $env:LOCALAPPDATA "Zapret2-GUI\release-token.xml"
+    }
     if (Test-Path $tokenPath) {
         try {
             $secure = Import-Clixml -Path $tokenPath

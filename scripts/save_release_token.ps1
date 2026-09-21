@@ -7,7 +7,12 @@
 #
 #  Токен вводится в скрытое поле, никуда не печатается и сохраняется
 #  зашифрованным через DPAPI в
-#      %LOCALAPPDATA%\Zapret2-GUI\release-token.xml
+#      %LOCALAPPDATA%\Zapret2-Release\release-token.xml
+#
+#  Каталог СПЕЦИАЛЬНО отдельный от данных приложения. Раньше токен лежал в
+#  %LOCALAPPDATA%\Zapret2-GUI рядом с bin, dist и журналами — то есть там,
+#  где при разборе проблем логично снести всё целиком. Ровно так он однажды
+#  и пропал. Здесь его чистить незачем и некому.
 #
 #  DPAPI привязывает шифрование к вашей учётной записи Windows и этой
 #  машине: файл нельзя расшифровать ни под другим пользователем, ни на
@@ -31,10 +36,20 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$dir = Join-Path $env:LOCALAPPDATA "Zapret2-GUI"
+$dir = Join-Path $env:LOCALAPPDATA "Zapret2-Release"
 $path = Join-Path $dir "release-token.xml"
 
+# Перенос из прежнего места: старый каталог рабочий для приложения, его
+# сносят при разборе проблем вместе с токеном.
+$legacy = Join-Path (Join-Path $env:LOCALAPPDATA "Zapret2-GUI") "release-token.xml"
+if ((Test-Path $legacy) -and -not (Test-Path $path)) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    Move-Item $legacy $path -Force
+    Write-Host "Токен перенесён из каталога приложения в $path" -ForegroundColor Green
+}
+
 if ($Remove) {
+    if (Test-Path $legacy) { Remove-Item $legacy -Force }
     if (Test-Path $path) {
         Remove-Item $path -Force
         Write-Host "Сохранённый токен удалён." -ForegroundColor Green
