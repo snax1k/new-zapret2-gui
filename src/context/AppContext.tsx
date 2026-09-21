@@ -35,7 +35,7 @@ import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccen
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.2.1';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';

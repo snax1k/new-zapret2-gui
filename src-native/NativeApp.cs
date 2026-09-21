@@ -40,7 +40,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.2.0";
+        public const string AppVersion = "0.2.1";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -2143,6 +2143,7 @@ namespace Zapret2App
             Task.Run(async () =>
             {
                 SendLog("info", "Запуск сетевой диагностики...", "Diagnostics");
+                LogProbeBinding("Diagnostics");
 
                 string[] targets = { "youtube.com", "rr1---sn-4g5ednss.googlevideo.com", "gateway.discord.gg", "rotterdam.discord.media" };
                 string[] targetIds = { "yt-web", "yt-video", "dc-gateway", "dc-voice" };
@@ -2190,7 +2191,7 @@ namespace Zapret2App
                     bool tcpOk = false;
                     try
                     {
-                        using (var tcp = new TcpClient())
+                        using (var tcp = CreateProbeClient())
                         {
                             var connectTask = tcp.ConnectAsync(target, 443);
                             if (await Task.WhenAny(connectTask, Task.Delay(3000)) == connectTask && tcp.Connected)
@@ -2256,7 +2257,7 @@ namespace Zapret2App
             var sw = Stopwatch.StartNew();
             try
             {
-                using (var tcp = new TcpClient())
+                using (var tcp = CreateProbeClient())
                 {
                     var connectTask = tcp.ConnectAsync(host, 443);
                     if (await Task.WhenAny(connectTask, Task.Delay(3000)) != connectTask)
@@ -2308,6 +2309,118 @@ namespace Zapret2App
         //     ещё одной переменной и результаты нельзя сравнивать.
         // =================================================================
 
+
+        // =================================================================
+        //  Привязка проверок к физическому адаптеру
+        //
+        //  Автоподбор и диагностика обязаны мерить канал ПРОВАЙДЕРА. Если
+        //  этого не делать, результат превращается в ложь: у человека поднят
+        //  VPN, проверка уходит в туннель, там работает всё — и подбор
+        //  радостно сообщает, что прошли все семь вариантов.
+        //
+        //  Обойти системный прокси мало. Прокси — это настройка, её честно
+        //  игнорирует любой обычный сокет. А туннельный адаптер (WireGuard,
+        //  WinTun, Tailscale, SOCKS-туннели) перехватывает трафик маршрутом,
+        //  и никакая настройка тут не поможет: нужно явно привязать сокет к
+        //  адресу физической сетевой карты.
+        //
+        //  Отличаем физический адаптер от туннеля по двум признакам сразу:
+        //  у туннеля обычно нет настоящего MAC-адреса, а в описании почти
+        //  всегда есть опознаваемое слово. Ни один признак поодиночке не
+        //  надёжен, вместе — достаточно.
+        // =================================================================
+
+        private static readonly string[] TunnelMarkers = new string[]
+        {
+            "tun", "tap", "vpn", "wireguard", "wintun", "openvpn", "tailscale",
+            "zerotier", "hamachi", "radmin", "proton", "nord", "express",
+            "socks", "loopback", "virtual", "pseudo", "teredo", "isatap"
+        };
+
+        private static bool LooksLikeTunnel(System.Net.NetworkInformation.NetworkInterface ni)
+        {
+            string text = ((ni.Description ?? "") + " " + (ni.Name ?? "")).ToLowerInvariant();
+            foreach (string m in TunnelMarkers)
+                if (text.Contains(m)) return true;
+
+            // У туннельных адаптеров MAC либо пустой, либо нулевой.
+            try
+            {
+                byte[] mac = ni.GetPhysicalAddress().GetAddressBytes();
+                if (mac.Length < 6) return true;
+                bool allZero = true;
+                foreach (byte b in mac) if (b != 0) { allZero = false; break; }
+                if (allZero) return true;
+            }
+            catch { }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Локальный IPv4-адрес физической сетевой карты с настроенным шлюзом.
+        /// null — подходящего адаптера нет, тогда сокет пойдёт как обычно.
+        /// </summary>
+        private static IPAddress FindPhysicalLocalAddress()
+        {
+            try
+            {
+                foreach (System.Net.NetworkInformation.NetworkInterface ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                    if (LooksLikeTunnel(ni)) continue;
+
+                    System.Net.NetworkInformation.IPInterfaceProperties props = ni.GetIPProperties();
+
+                    // Без шлюза адаптер никуда наружу не ведёт.
+                    bool hasGateway = false;
+                    foreach (System.Net.NetworkInformation.GatewayIPAddressInformation g in props.GatewayAddresses)
+                    {
+                        if (g.Address != null && g.Address.AddressFamily == AddressFamily.InterNetwork
+                            && !g.Address.Equals(IPAddress.Any)) { hasGateway = true; break; }
+                    }
+                    if (!hasGateway) continue;
+
+                    foreach (System.Net.NetworkInformation.UnicastIPAddressInformation ua in props.UnicastAddresses)
+                    {
+                        if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
+                            return ua.Address;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>
+        /// TcpClient, привязанный к физическому адаптеру, если его удалось найти.
+        /// </summary>
+        private static TcpClient CreateProbeClient()
+        {
+            IPAddress local = FindPhysicalLocalAddress();
+            if (local == null) return new TcpClient();
+            try { return new TcpClient(new IPEndPoint(local, 0)); }
+            catch { return new TcpClient(); }
+        }
+
+
+        /// <summary>
+        /// Пишет в журнал, каким адаптером пойдут проверки. Молчать здесь
+        /// нельзя: от выбора адаптера зависит, что именно измерено — канал
+        /// провайдера или чужой туннель.
+        /// </summary>
+        private void LogProbeBinding(string source)
+        {
+            IPAddress local = FindPhysicalLocalAddress();
+            if (local != null)
+                SendLog("info", "Проверки идут через физический адаптер " + local + " — туннели и VPN в обход.", source);
+            else
+                SendLog("warn",
+                    "Физический адаптер не найден, проверки пойдут обычным маршрутом. " +
+                    "Если поднят VPN или туннель, результат будет про него, а не про вашего провайдера.", source);
+        }
+
         private class TuneProbe
         {
             public string Host;
@@ -2319,7 +2432,7 @@ namespace Zapret2App
         {
             try
             {
-                using (var tcp = new TcpClient())
+                using (var tcp = CreateProbeClient())
                 {
                     var connect = tcp.ConnectAsync(ip, 443);
                     if (await Task.WhenAny(connect, Task.Delay(connectMs)) != connect) return false;
@@ -2362,6 +2475,8 @@ namespace Zapret2App
                 SendLog("warn", "Автоподбор уже идёт.", "Autotune");
                 return;
             }
+
+            LogProbeBinding("Autotune");
 
             // payload: <restoreArgs> \x1f <host1,host2> \x1f id|label|args \x1e id|label|args ...
             string[] head = payload.Split('\x1f');
