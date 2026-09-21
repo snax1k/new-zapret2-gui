@@ -41,7 +41,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.3.0";
+        public const string AppVersion = "0.3.1";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -3015,6 +3015,38 @@ namespace Zapret2App
             return list.ToArray();
         }
 
+
+        /// <summary>
+        /// Первый адрес из списка, который отвечает на TCP 443.
+        /// </summary>
+        /// <remarks>
+        /// Проверяется именно установка соединения, без TLS: на этом этапе нас
+        /// интересует только «жив ли адрес». Блокировка по имени сайта TCP не
+        /// трогает, поэтому заблокированный, но живой адрес сюда проходит — и
+        /// это правильно, его и надо проверять стратегиями.
+        ///
+        /// Вызывается с остановленным ядром, до перебора вариантов: адрес
+        /// должен быть один и тот же для всех, иначе результаты несравнимы.
+        /// </remarks>
+        private string PickReachable(System.Collections.Generic.List<string> ips, string host)
+        {
+            foreach (string ip in ips)
+            {
+                if (autotuneCancel) return null;
+                try
+                {
+                    using (var tcp = CreateProbeClient())
+                    {
+                        var connect = tcp.ConnectAsync(ip, 443);
+                        if (connect.Wait(2500) && tcp.Connected) return ip;
+                    }
+                }
+                catch { }
+                SendLog("info", host + ": адрес " + ip + " не отвечает, пробую следующий.", "Autotune");
+            }
+            return null;
+        }
+
         /// <summary>Сколько раз проверяется каждая цель.</summary>
         private const int AutotuneAttempts = 3;
 
@@ -3064,18 +3096,43 @@ namespace Zapret2App
                         try
                         {
                             var addrs = Dns.GetHostAddresses(host);
-                            string ip = null;
+                            var candidates = new System.Collections.Generic.List<string>();
                             foreach (var a in addrs)
                             {
-                                if (a.AddressFamily == AddressFamily.InterNetwork) { ip = a.ToString(); break; }
+                                if (a.AddressFamily == AddressFamily.InterNetwork) candidates.Add(a.ToString());
                             }
-                            if (ip == null)
+                            if (candidates.Count == 0)
                             {
                                 SendLog("error", "DNS не вернул IPv4 для " + host + " — проверка невозможна.", "Autotune");
                                 continue;
                             }
+
+                            // Берём не первый адрес, а первый ОТВЕЧАЮЩИЙ.
+                            //
+                            // Раньше брался первый из списка и на нём висел весь
+                            // перебор. У discord.com из пяти адресов один не
+                            // отвечал вовсе, DNS вернул именно его — и все восемь
+                            // вариантов, включая эталон, честно бились в стену.
+                            // Итог гласил «ни с обходом, ни без него», хотя
+                            // соседние адреса отвечали за 12 мс.
+                            //
+                            // Браузер в такой ситуации просто идёт к следующему
+                            // адресу. Проверка обязана вести себя так же, иначе
+                            // она меряет доступность одного адреса, а не блокировку.
+                            string ip = PickReachable(candidates, host);
+                            if (ip == null)
+                            {
+                                SendLog("error",
+                                    "Ни один адрес " + host + " не отвечает на порт 443 (" +
+                                    string.Join(", ", candidates.ToArray()) + "). " +
+                                    "Это не похоже на блокировку по имени сайта: соединение не устанавливается вовсе. " +
+                                    "Цель исключена из проверки.", "Autotune");
+                                continue;
+                            }
+
                             probes.Add(new TuneProbe { Host = host, Ip = ip });
-                            SendLog("info", string.Format("Цель {0} -> {1}", host, ip), "Autotune");
+                            SendLog("info", string.Format("Цель {0} -> {1}{2}", host, ip,
+                                candidates.Count > 1 ? " (из " + candidates.Count + " адресов)" : ""), "Autotune");
                         }
                         catch (Exception ex)
                         {
