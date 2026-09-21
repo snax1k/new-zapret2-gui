@@ -105,6 +105,21 @@ const EXCLUDES = `--hostlist-exclude=${L_EXCLUDE} --hostlist-exclude=${L_EXCLUDE
  * TCP, до всякого вмешательства, — блокируют выше. Программа нацелена на
  * YouTube и Discord, и лишний профиль только усложнял разбор логов.
  */
+/**
+ * Ключ и подпись встроенных пресетов.
+ *
+ * Раньше встроенный пресет при каждом запуске брался из сборки заново, а
+ * сохранённая копия отбрасывалась. Сделано это было ради доставки исправлений
+ * стратегий, но побочный эффект оказался хуже задачи: **правки пользователя во
+ * встроенном пресете молча исчезали при каждом перезапуске**.
+ *
+ * Теперь вместе с пресетами хранится подпись эталона из сборки. Совпала —
+ * значит всё, что отличается, правил пользователь, и его правки уважаются.
+ * Не совпала — мы выпустили новый встроенный пресет: ставим его, а правки
+ * откладываем отдельной копией, чтобы ничего не пропало без следа.
+ */
+const BUILTIN_SIG_KEY = 'zapret2_builtin_sig_v1';
+
 const INITIAL_PRESETS: Preset[] = [
   {
     id: 'general-v72',
@@ -145,6 +160,8 @@ const INITIAL_PRESETS: Preset[] = [
     }
   }
 ];
+
+const BUILTIN_SIGNATURE = JSON.stringify(INITIAL_PRESETS.map(p => [p.id, p.args]));
 
 // Вкладка «Хостлисты» хранит ДОПОЛНЕНИЯ пользователя. Основные списки
 // (list-general.txt, list-google.txt, list-exclude.txt) поставляются со сборкой
@@ -387,18 +404,48 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [presets, setPresets] = useState<Preset[]>(() => {
     const saved = localStorage.getItem('zapret2_presets_v6');
-    if (saved) {
-      try {
-        const stored: Preset[] = JSON.parse(saved);
-        // Встроенные пресеты всегда берутся из сборки: иначе исправления
-        // стратегии не доходили бы до тех, у кого уже есть сохранённая копия,
-        // а единственным способом их доставить был сброс всего хранилища.
-        // Пользовательские пресеты при этом сохраняются.
-        const builtinIds = new Set(INITIAL_PRESETS.map(p => p.id));
-        const custom = stored.filter(p => !builtinIds.has(p.id));
-        return [...INITIAL_PRESETS, ...custom];
-      } catch { }
-    }
+    if (!saved) return INITIAL_PRESETS;
+
+    try {
+      const stored: Preset[] = JSON.parse(saved);
+      const builtinIds = new Set(INITIAL_PRESETS.map(p => p.id));
+      const custom = stored.filter(p => !builtinIds.has(p.id));
+      const storedBuiltins = stored.filter(p => builtinIds.has(p.id));
+      const sameBuild = localStorage.getItem(BUILTIN_SIG_KEY) === BUILTIN_SIGNATURE;
+
+      if (sameBuild) {
+        // Сборка та же — значит всё, что отличается от эталона, правил
+        // пользователь. Его правки и берём.
+        return [
+          ...INITIAL_PRESETS.map(b => storedBuiltins.find(s => s.id === b.id) || b),
+          ...custom
+        ];
+      }
+
+      // Сборка принесла новый встроенный пресет. Ставим его — иначе
+      // исправления стратегий не дойдут до тех, кто пресет однажды трогал.
+      // Но правки не выбрасываем: откладываем их отдельной копией.
+      const used = new Set<string>([...builtinIds, ...custom.map(p => p.id)]);
+      const rescued: Preset[] = [];
+      for (const s of storedBuiltins) {
+        const b = INITIAL_PRESETS.find(x => x.id === s.id);
+        if (!b || JSON.stringify(b.args) === JSON.stringify(s.args)) continue;
+
+        let id = s.id + '-prev';
+        while (used.has(id)) id = s.id + '-prev-' + Math.random().toString(36).substring(2, 6);
+        used.add(id);
+
+        rescued.push({
+          ...s,
+          id,
+          name: s.name + ' (правки до обновления)',
+          badge: undefined,
+          recommended: false
+        });
+      }
+      return [...INITIAL_PRESETS, ...rescued, ...custom];
+    } catch { }
+
     return INITIAL_PRESETS;
   });
 
@@ -649,9 +696,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   }, []);
 
-  // Save presets to localStorage
+  // Пресеты и подпись эталона пишутся вместе: по ней при следующем запуске
+  // видно, отличается ли сохранённый встроенный пресет из-за правок
+  // пользователя или из-за того, что мы выпустили новый.
   useEffect(() => {
     localStorage.setItem('zapret2_presets_v6', JSON.stringify(presets));
+    localStorage.setItem(BUILTIN_SIG_KEY, BUILTIN_SIGNATURE);
   }, [presets]);
 
   const activePreset = presets.find(p => p.id === activePresetId) || presets[0];
