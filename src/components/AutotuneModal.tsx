@@ -35,8 +35,29 @@ export const AutotuneModal: React.FC = () => {
   const onClose = () => setIsAutotuneModalOpen(false);
 
   const finished = autotuneRows.filter(r => r.phase === 'done');
-  const winners = finished.filter(r => r.ok).sort((a, b) => a.ms - b.ms);
-  const allDone = autotuneRows.length > 0 && finished.length === autotuneRows.length;
+  // Эталон — не стратегия, применять его нельзя: это ответ на вопрос
+  // «а блокируют ли вообще».
+  const baseline = autotuneRows.find(r => r.id === 'off');
+  const strategies = finished.filter(r => r.id !== 'off');
+
+  // Ранжирование по числу успешных проб, а НЕ по времени.
+  //
+  // Раньше здесь стояло sort((a, b) => a.ms - b.ms), и побеждал самый
+  // быстрый. Это неверно в корне: быстрый ответ часто означает быстрый
+  // отказ. На живом замере блокировка по имени сайта отвечала за 38 мс
+  // сбросом, а успешное соединение занимало 300 мс. Время оставлено только
+  // как разделитель при равном счёте.
+  const winners = strategies
+    .filter(r => r.passed > 0)
+    .sort((a, b) => (b.passed - a.passed) || (a.ms - b.ms));
+
+  const best = winners[0];
+  const bestIsFull = !!best && best.ok;
+
+  // Перебор может закончиться раньше списка: если эталон прошёл, остальные
+  // варианты не гоняются. Поэтому итог показываем по факту остановки.
+  const allDone = finished.length > 0 && !isAutotuneRunning;
+  const baselineClean = !!baseline && baseline.phase === 'done' && baseline.ok;
 
   // Группы подбираются раздельно, потому что провайдеры ведут себя с
   // YouTube и с Discord по-разному: у одного и того же человека для YouTube
@@ -105,9 +126,10 @@ export const AutotuneModal: React.FC = () => {
         {autotuneRows.length === 0 && (
           <div className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400 space-y-2">
             <p>
-              Будут проверены семь вариантов обхода на целях:
+              Сначала цели проверяются <b>без обхода</b> — если они открываются и так,
+              перебор на этом и закончится. Если нет, проверяются семь вариантов на целях:
               <span className="font-mono text-indigo-500"> {currentGroup.targets}</span>.
-              Займёт до двух минут.
+              Каждая цель проверяется трижды: одна удачная попытка ещё ничего не значит.
             </p>
             <p>
               Подбор меняет только профиль «{currentGroup.label}». Вторая группа
@@ -129,7 +151,7 @@ export const AutotuneModal: React.FC = () => {
         {autotuneRows.length > 0 && (
           <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
             {autotuneRows.map(row => {
-              const isBest = allDone && winners.length > 0 && winners[0].id === row.id;
+              const isBest = allDone && !baselineClean && !!best && best.id === row.id;
               const active = row.phase === 'starting' || row.phase === 'testing';
 
               return (
@@ -158,9 +180,15 @@ export const AutotuneModal: React.FC = () => {
                       {row.phase === 'starting' && 'Поднимается ядро...'}
                       {row.phase === 'testing' && 'Проверка соединения...'}
                       {row.phase === 'idle' && 'В очереди'}
-                      {row.phase === 'done' && (row.detail
-                        ? row.detail
-                        : `Пройдено ${row.passed} из ${row.total} · ${row.ms} мс`)}
+                      {row.phase === 'done' && (
+                        row.id === 'off'
+                          ? (row.ok
+                              ? `Открылось без обхода — ${row.passed} из ${row.total}`
+                              : `Без обхода не открывается — ${row.passed} из ${row.total}`)
+                          : `Успешных проб: ${row.passed} из ${row.total}` +
+                            (row.detail ? ` · ${row.detail}` : '') +
+                            ` · ${row.ms} мс`
+                      )}
                     </div>
                   </div>
 
@@ -170,7 +198,7 @@ export const AutotuneModal: React.FC = () => {
                     </span>
                   )}
 
-                  {row.phase === 'done' && row.ok && !isAutotuneRunning && (
+                  {row.phase === 'done' && row.ok && row.id !== 'off' && !isAutotuneRunning && (
                     <button
                       onClick={() => apply(row.id)}
                       className="text-[10px] font-semibold px-2 py-1 rounded-lg bg-indigo-500/20 text-indigo-500 hover:bg-indigo-500/30 shrink-0"
@@ -184,20 +212,43 @@ export const AutotuneModal: React.FC = () => {
           </div>
         )}
 
-        {/* Итог */}
+        {/* Итог одной фразой.
+
+            Раньше здесь было «сработавших вариантов: N, быстрее всех — X».
+            Человеку это не помогало: он и так видел таблицу, а «быстрее
+            всех» вдобавок подсказывало неверный выбор. Теперь итог отвечает
+            на единственный вопрос, ради которого подбор и запускают. */}
         {allDone && (
           <div className={`p-2.5 rounded-xl text-[11px] leading-relaxed border ${
-            winners.length > 0
+            baselineClean || bestIsFull
               ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300'
               : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-300'
           }`}>
-            {winners.length > 0 ? (
-              <>Сработавших вариантов: {winners.length}. Быстрее всех — «{winners[0].label}».</>
+            {baselineClean ? (
+              <>
+                <b>Обход здесь не нужен.</b> Цели открылись без него — блокировки не
+                видно, поэтому перебор остановлен. Если приложение всё равно не
+                работает, дело не в DPI: посмотрите плашку окружения на главной
+                (прокси, VPN) и перезапустите сам Discord — у него свой кэш.
+              </>
+            ) : bestIsFull ? (
+              <>
+                <b>Подошло: «{best.label}».</b> Успешных проб {best.passed} из {best.total},
+                без единого срыва. Нажмите «Применить» в его строке.
+              </>
+            ) : best ? (
+              <>
+                <b>Полностью не прошёл ни один вариант.</b> Лучший — «{best.label}»,
+                {' '}{best.passed} из {best.total}. Такой вариант работает через раз:
+                соединение может устанавливаться и тут же обрываться. Применить его
+                можно, но стоит прислать журнал.
+              </>
             ) : (
               <>
-                Ни один вариант не пробил блокировку. Это не обязательно вина обхода:
-                если включён системный прокси, трафик YouTube может вообще не доходить
-                до ядра. Проверьте плашку окружения на главной.
+                <b>Ни один вариант не помог.</b> Цели не открываются ни с обходом, ни
+                без него. Проверьте плашку окружения на главной: включённый системный
+                прокси или VPN забирают трафик до того, как его увидит ядро. Если там
+                чисто — пришлите журнал, блокировка нестандартная.
               </>
             )}
           </div>

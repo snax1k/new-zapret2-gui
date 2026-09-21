@@ -37,7 +37,7 @@ import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.2.4';
+export const APP_VERSION = '0.3.0';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -577,11 +577,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           } else if (data.type === 'preflight') {
             setPreflight(Array.isArray(data.items) ? data.items : []);
           } else if (data.type === 'autotune_step') {
-            setAutotuneRows(prev => prev.map((r, i) =>
-              i === data.index ? { ...r, phase: data.phase } : r));
+            // По id, а не по номеру: порядок перебора на нативной стороне
+            // может отличаться от порядка строк в таблице.
+            setAutotuneRows(prev => prev.map(r =>
+              r.id === data.id ? { ...r, phase: data.phase } : r));
           } else if (data.type === 'autotune_result') {
-            setAutotuneRows(prev => prev.map((r, i) =>
-              i === data.index
+            setAutotuneRows(prev => prev.map(r =>
+              r.id === data.id
                 ? { ...r, phase: 'done', ok: !!data.ok, passed: data.passed || 0,
                     total: data.total || 0, ms: data.ms || 0, detail: data.detail || '' }
                 : r));
@@ -1012,7 +1014,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     setAutotuneGroup(group);
 
-    const variants = YOUTUBE_STRATEGIES.filter(s => s.id !== 'off');
+    // Эталон идёт первым и участвует в переборе наравне с остальными.
+    // Раньше он из подбора исключался вовсе, и вопрос «а нужен ли здесь
+    // обход» не задавался никогда — человек перебирал семь стратегий, не
+    // зная, что цель может открываться и без них.
+    const baseline = YOUTUBE_STRATEGIES.filter(s => s.id === 'off');
+    const variants = [...baseline, ...YOUTUBE_STRATEGIES.filter(s => s.id !== 'off')];
     setAutotuneRows(variants.map(s => ({
       id: s.id, label: s.label, phase: 'idle' as const,
       ok: false, passed: 0, total: 0, ms: 0, detail: ''

@@ -41,7 +41,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.2.4";
+        public const string AppVersion = "0.3.0";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -2874,6 +2874,49 @@ namespace Zapret2App
         }
 
         /// <summary>Тихая проверка TLS: ничего не шлёт в интерфейс, только результат.</summary>
+        /// <summary>
+        /// Совпадает ли имя из сертификата с запрошенным хостом.
+        /// </summary>
+        /// <remarks>
+        /// Рукопожатие само по себе успехом не считается: завершить его может
+        /// и промежуточное устройство со своим сертификатом. Проверка имени
+        /// доказывает, что мы дошли до настоящего сервера.
+        ///
+        /// Сверка нестрогая и намеренно: полноценная проверка цепочки здесь
+        /// не нужна и только добавила бы ложных провалов на корпоративных
+        /// машинах. Нас интересует одно — не подменили ли нам собеседника.
+        /// </remarks>
+        private static bool CertNameMatches(string subject, string host)
+        {
+            if (string.IsNullOrEmpty(subject) || string.IsNullOrEmpty(host)) return false;
+
+            string cn = null;
+            foreach (string part in subject.Split(','))
+            {
+                string p = part.Trim();
+                if (p.StartsWith("CN=", StringComparison.OrdinalIgnoreCase)) { cn = p.Substring(3).Trim(); break; }
+            }
+            if (string.IsNullOrEmpty(cn)) return false;
+
+            host = host.ToLowerInvariant();
+            cn = cn.ToLowerInvariant();
+
+            if (cn == host) return true;
+            if (cn.StartsWith("*."))
+            {
+                string bare = cn.Substring(2);
+                // *.discord.com подходит и самому discord.com, и его поддоменам.
+                if (host == bare) return true;
+                if (host.EndsWith("." + bare)) return true;
+            }
+            // discord.gg выдаёт сертификат на discord.gg для gateway.discord.gg.
+            return host.EndsWith("." + cn);
+        }
+
+        /// <summary>
+        /// Одна проба: TCP, рукопожатие TLS с настоящим именем и сверка
+        /// сертификата. Возвращает true только если дошли до нужного сервера.
+        /// </summary>
         private async Task<bool> TryTlsProbe(string ip, string sni, int connectMs, int tlsMs)
         {
             try
@@ -2889,11 +2932,51 @@ namespace Zapret2App
                         var tls = ssl.AuthenticateAsClientAsync(sni);
                         if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls) return false;
                         await tls;
+
+                        string subject = null;
+                        try { if (ssl.RemoteCertificate != null) subject = ssl.RemoteCertificate.Subject; }
+                        catch { }
+
+                        if (!CertNameMatches(subject, sni))
+                        {
+                            SendLog("warn",
+                                "Рукопожатие с " + sni + " прошло, но сертификат выписан на «" +
+                                (subject ?? "неизвестно") + "» — это не тот сервер.", "Autotune");
+                            return false;
+                        }
                         return true;
                     }
                 }
             }
             catch { return false; }
+        }
+
+        /// <summary>
+        /// Проверяет одну цель несколько раз и возвращает число успехов.
+        /// </summary>
+        /// <remarks>
+        /// Одна попытка ничего не доказывает: многие DPI пропускают первое
+        /// соединение и режут следующие. Отсюда и жалобы «подобрал, а не
+        /// работает».
+        ///
+        /// После двух провалов оставшиеся попытки пропускаем: до нужного
+        /// счёта уже не дотянуть, а каждая неудачная проба стоит целого
+        /// таймаута.
+        /// </remarks>
+        private async Task<int> ProbeTarget(TuneProbe pr, int attempts)
+        {
+            int ok = 0, failed = 0;
+            for (int i = 0; i < attempts; i++)
+            {
+                if (autotuneCancel) break;
+                if (await TryTlsProbe(pr.Ip, pr.Host, 4000, 6000)) ok++;
+                else if (++failed >= 2) break;
+
+                // Соединения подряд без паузы выглядят для DPI иначе, чем
+                // обычная работа браузера.
+                if (i + 1 < attempts) await Task.Delay(250);
+            }
+            return ok;
         }
 
         private void SendTuneEvent(string json)
@@ -2913,6 +2996,27 @@ namespace Zapret2App
                 return winws != null && !winws.HasExited;
             }
         }
+
+
+        /// <summary>Ставит вариант «выключено» первым в списке перебора.</summary>
+        private static string[] MoveBaselineFirst(string[] variants)
+        {
+            int at = -1;
+            for (int i = 0; i < variants.Length; i++)
+            {
+                if (variants[i].StartsWith("off|", StringComparison.OrdinalIgnoreCase)) { at = i; break; }
+            }
+            if (at <= 0) return variants;
+
+            var list = new System.Collections.Generic.List<string>(variants);
+            string baseline = list[at];
+            list.RemoveAt(at);
+            list.Insert(0, baseline);
+            return list.ToArray();
+        }
+
+        /// <summary>Сколько раз проверяется каждая цель.</summary>
+        private const int AutotuneAttempts = 3;
 
         private void RunAutotune(string payload)
         {
@@ -2935,6 +3039,12 @@ namespace Zapret2App
             string restoreArgs = head[0];
             string[] hosts = head[1].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
             string[] rawVariants = head[2].Split(new[] { '\x1e' }, StringSplitOptions.RemoveEmptyEntries);
+
+            // Эталон («обход выключен») идёт первым, а не седьмой строкой в
+            // списке. Его результат меняет смысл всего остального: если цели
+            // открываются и без обхода, перебирать стратегии незачем, а если
+            // не открываются — понятно, что именно мы пытаемся починить.
+            rawVariants = MoveBaselineFirst(rawVariants);
 
             autotuneRunning = true;
             autotuneCancel = false;
@@ -2997,7 +3107,11 @@ namespace Zapret2App
                             i, rawVariants.Length, JsonEscape(id)));
 
                         StopZapretProcess(false);
-                        bool up = StartCoreForTune(args);
+
+                        // Эталон гоняется с полностью остановленным ядром, а не
+                        // с отключённым профилем: вопрос «а блокируют ли вообще»
+                        // должен проверяться так, как будто программы нет.
+                        bool up = (id == "off") ? true : StartCoreForTune(args);
 
                         if (!up)
                         {
@@ -3016,24 +3130,48 @@ namespace Zapret2App
                             "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"testing\"}}",
                             i, rawVariants.Length, JsonEscape(id)));
 
+                        // Каждая цель проверяется трижды. Счёт успехов, а не
+                        // галочка: «3 из 3» и «2 из 3» — принципиально разные
+                        // вещи, второе означает, что вариант отваливается.
                         int passed = 0;
+                        int total = probes.Count * AutotuneAttempts;
+                        var weak = new System.Collections.Generic.List<string>();
                         var sw = Stopwatch.StartNew();
+
                         foreach (var pr in probes)
                         {
                             if (autotuneCancel) break;
-                            bool ok = await TryTlsProbe(pr.Ip, pr.Host, 4000, 6000);
-                            if (ok) passed++;
+                            int ok = await ProbeTarget(pr, AutotuneAttempts);
+                            passed += ok;
+                            if (ok < AutotuneAttempts) weak.Add(pr.Host + ": " + ok + " из " + AutotuneAttempts);
                         }
                         sw.Stop();
 
-                        bool allOk = passed == probes.Count;
-                        SendLog(allOk ? "success" : "warn",
-                            string.Format("[{0}] пройдено {1} из {2} за {3} мс", label, passed, probes.Count, sw.ElapsedMilliseconds),
+                        bool allOk = passed == total;
+                        string detail = weak.Count > 0 ? string.Join("; ", weak.ToArray()) : "";
+
+                        SendLog(allOk ? "success" : passed > 0 ? "warn" : "error",
+                            string.Format("[{0}] успешных проб {1} из {2} за {3} мс{4}",
+                                label, passed, total, sw.ElapsedMilliseconds,
+                                detail.Length > 0 ? " (" + detail + ")" : ""),
                             "Autotune");
 
                         SendTuneEvent(string.Format(
-                            "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":{2},\"passed\":{3},\"total\":{4},\"ms\":{5},\"detail\":\"\"}}",
-                            i, JsonEscape(id), allOk ? "true" : "false", passed, probes.Count, sw.ElapsedMilliseconds));
+                            "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":{2},\"passed\":{3},\"total\":{4},\"ms\":{5},\"detail\":\"{6}\"}}",
+                            i, JsonEscape(id), allOk ? "true" : "false", passed, total, sw.ElapsedMilliseconds,
+                            JsonEscape(detail)));
+
+                        // Эталон прошёл полностью — блокировки нет, и перебор
+                        // стратегий ничего не даст. Останавливаемся и говорим
+                        // об этом прямо, вместо пяти минут бессмысленной работы.
+                        if (id == "off" && allOk)
+                        {
+                            SendLog("success",
+                                "Цели открываются и без обхода — блокировки не видно. Перебор стратегий прекращён. " +
+                                "Если приложение всё равно не работает, дело не в DPI: проверьте VPN, прокси и кэш самого приложения.",
+                                "Autotune");
+                            break;
+                        }
                     }
                 }
                 catch (Exception ex)
