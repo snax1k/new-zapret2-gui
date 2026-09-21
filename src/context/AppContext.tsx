@@ -16,6 +16,7 @@ import {
   YoutubeStrategyId,
   StrategyGroup,
   DiscordCacheItem,
+  NetRoute,
   PreflightItem,
   AutotuneRow
 } from '../types';
@@ -36,7 +37,7 @@ import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.2.3';
+export const APP_VERSION = '0.2.4';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -337,6 +338,9 @@ interface AppContextType {
   openAppFolder: () => void;
   isWatchdogClean: boolean;
 
+  /** Куда система отправляет трафик. null — нативная часть ещё не сказала. */
+  netRoute: NetRoute | null;
+
   /** Найденные сборки Discord и размер их кэша. null — ещё не смотрели. */
   discordCache: DiscordCacheItem[] | null;
   /** Идёт удаление. */
@@ -470,6 +474,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [diagnostics, setDiagnostics] = useState<DiagnosticsItem[]>(INITIAL_DIAGNOSTICS);
   const [isDiagnosticsRunning, setIsDiagnosticsRunning] = useState(false);
   const [isWatchdogClean, setIsWatchdogClean] = useState(true);
+  const [netRoute, setNetRoute] = useState<NetRoute | null>(null);
   const [discordCache, setDiscordCache] = useState<DiscordCacheItem[] | null>(null);
   const [isDiscordCleaning, setIsDiscordCleaning] = useState(false);
 
@@ -655,6 +660,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 }));
               return [...added, ...prev];
             });
+          } else if (data.type === 'net_route') {
+            setNetRoute({
+              ifIdx: data.ifIdx || 0,
+              name: data.name || '',
+              isTunnel: !!data.isTunnel,
+              physIfIdx: data.physIfIdx || 0,
+              physName: data.physName || ''
+            });
           } else if (data.type === 'discord_scan') {
             setDiscordCache(Array.isArray(data.items) ? data.items : []);
           } else if (data.type === 'stale_winws_done') {
@@ -711,7 +724,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     saveSetting('zapret2_active_preset_v5', activePresetId);
   }, [activePresetId]);
 
-  const activeCommand = buildPresetCommand(activePreset, quickToggles);
+  const activeCommand = buildPresetCommand(activePreset, quickToggles, netRoute?.physIfIdx || 0);
 
   useEffect(() => {
     // «Правила десинхронизации» = количество профилей winws в текущей команде.
@@ -880,7 +893,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     // disconnected / error -> запуск
     setStatus('connecting');
-    const args = buildPresetArgs(activePreset, quickToggles);
+    const args = buildPresetArgs(activePreset, quickToggles, netRoute?.physIfIdx || 0);
+    startedIfIdx.current = netRoute?.physIfIdx || 0;
     addLog('info', `Запуск ядра Zapret: [${activePreset.name}]`, 'Runner');
     addLog('info', `winws.exe ${args}`, 'Runner');
 
@@ -929,7 +943,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (status === 'connected' && window.chrome?.webview) {
       addLog('info', 'Перезапуск ядра с новыми параметрами...', 'Runner');
       window.chrome.webview.postMessage('save_lists:' + serializeLists());
-      window.chrome.webview.postMessage('start_engine:' + buildPresetArgs(activePreset, next));
+      window.chrome.webview.postMessage('start_engine:' + buildPresetArgs(activePreset, next, netRoute?.physIfIdx || 0));
     }
   };
 
@@ -944,6 +958,33 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const runPreflight = () => {
     if (window.chrome?.webview) window.chrome.webview.postMessage('run_preflight');
   };
+
+  /**
+   * Индекс карты, с которым ядро было запущено.
+   *
+   * Ядро привязано к интерфейсу через --wf-iface. Если карта сменилась
+   * (Wi-Fi вместо кабеля, переподключение адаптера, поднялся туннель),
+   * привязка указывает в никуда — обход продолжает «работать», но не видит
+   * ни одного пакета. Молчать об этом нельзя, поэтому перезапускаем ядро.
+   */
+  const startedIfIdx = useRef<number>(0);
+
+  useEffect(() => {
+    if (status !== 'connected') return;
+    const now = netRoute?.physIfIdx || 0;
+    if (now === 0 || now === startedIfIdx.current) return;
+
+    addLog('warn',
+      `Сетевая карта сменилась (${startedIfIdx.current} -> ${now}` +
+      (netRoute?.physName ? `, ${netRoute.physName}` : '') +
+      '). Перезапускаю ядро с новой привязкой.', 'Runner');
+
+    startedIfIdx.current = now;
+    if (window.chrome?.webview) {
+      window.chrome.webview.postMessage('save_lists:' + serializeLists());
+      window.chrome.webview.postMessage('start_engine:' + buildPresetArgs(activePreset, quickToggles, now));
+    }
+  }, [netRoute, status]);
 
   // Проверка окружения выполняется один раз при запуске: её результат нужен
   // ещё до того, как пользователь нажмёт «Включить».
@@ -981,7 +1022,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Куда вернуть ядро после перебора: если обход был включён — к текущей
     // стратегии, если выключен — оставить выключенным.
     const restore = status === 'connected'
-      ? buildPresetArgs(activePreset, quickToggles)
+      ? buildPresetArgs(activePreset, quickToggles, netRoute?.physIfIdx || 0)
       : '';
 
     // Цели подбираются под группу. Для сайтов это именно те хосты, на
@@ -996,7 +1037,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         const toggles = group === 'youtube'
           ? { ...quickToggles, youtubeStrategy: s.id }
           : { ...quickToggles, sitesStrategy: s.id };
-        return [s.id, s.label, buildPresetArgs(activePreset, toggles)].join('|');
+        return [s.id, s.label, buildPresetArgs(activePreset, toggles, netRoute?.physIfIdx || 0)].join('|');
       })
       .join('\x1e');
 
@@ -1496,6 +1537,7 @@ const parseReleaseHighlights = (body: string): string[] => {
         killZombieWinDivert,
         openAppFolder,
         isWatchdogClean,
+        netRoute,
         discordCache,
         isDiscordCleaning,
         scanDiscordCache,

@@ -335,8 +335,15 @@ export const DEFAULT_TOGGLES: QuickToggleState = {
 
 /**
  * Возвращает готовую строку аргументов для winws.exe (без имени exe).
+ *
+ * @param ifIdx индекс физической сетевой карты для --wf-iface. 0 — не
+ *   ограничивать (так было до 0.2.4 и так остаётся, если карту не нашли).
  */
-export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFAULT_TOGGLES): string {
+export function buildPresetArgs(
+  preset: Preset,
+  toggles: QuickToggleState = DEFAULT_TOGGLES,
+  ifIdx: number = 0
+): string {
   const a = preset.args;
 
   // 1. Разбираем пресет на профили (разделитель --new).
@@ -424,6 +431,17 @@ export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFA
   }
 
   const head: string[] = [];
+  // Привязка к физической сетевой карте.
+  //
+  // WinDivert перехватывает пакеты на уровне IP, включая те, что идут В
+  // туннельный адаптер, то есть ещё не зашифрованные. Без этого ограничения
+  // ядро резало бы содержимое чужого VPN: провайдер внутри туннеля всё равно
+  // ничего не видит, пользы ноль, а сломать соединение можно.
+  //
+  // Ограничить можно только так: --wf-raw-part складывается с фильтром по
+  // ИЛИ и потому расширяет его, а не сужает (nfqws.c, wf_make_filter).
+  if (ifIdx > 0) head.push(`--wf-iface=${ifIdx}`);
+
   if (wfTcp) head.push(`--wf-tcp=${wfTcp}`);
   if (wfUdp) head.push(`--wf-udp=${wfUdp}`);
   // Совсем без портов ядро не запустится — подстраховка.
@@ -436,8 +454,12 @@ export function buildPresetArgs(preset: Preset, toggles: QuickToggleState = DEFA
 }
 
 /** Строка для отображения пользователю (с именем исполняемого файла). */
-export function buildPresetCommand(preset: Preset, toggles: QuickToggleState = DEFAULT_TOGGLES): string {
-  return 'winws.exe ' + buildPresetArgs(preset, toggles);
+export function buildPresetCommand(
+  preset: Preset,
+  toggles: QuickToggleState = DEFAULT_TOGGLES,
+  ifIdx: number = 0
+): string {
+  return 'winws.exe ' + buildPresetArgs(preset, toggles, ifIdx);
 }
 
 export interface ProfileSummary {

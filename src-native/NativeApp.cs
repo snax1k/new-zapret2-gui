@@ -41,7 +41,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.2.3";
+        public const string AppVersion = "0.2.4";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -265,6 +265,18 @@ namespace Zapret2App
             activityTimer.Interval = 1000;
             activityTimer.Tick += (s, e) => PushActivity();
             activityTimer.Start();
+
+            // Смена сети меняет индекс интерфейса, а к нему привязано ядро.
+            // Без этого при переходе Wi-Fi <-> кабель привязка стала бы
+            // неверной и обход тихо перестал бы работать.
+            try
+            {
+                System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (s, e) =>
+                {
+                    try { SendNetRoute(); } catch { }
+                };
+            }
+            catch { }
 
             this.FormClosing += MainForm_FormClosing;
         }
@@ -1444,27 +1456,38 @@ namespace Zapret2App
             //    меняют маршрут, и трафик может уходить мимо DPI провайдера.
             try
             {
-                var vpn = new System.Collections.Generic.List<string>();
-                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
-                {
-                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
-                    string d = (ni.Description + " " + ni.Name).ToLowerInvariant();
-                    if (d.Contains("tap-") || d.Contains("tun") || d.Contains("wintun") ||
-                        d.Contains("wireguard") || d.Contains("tailscale") ||
-                        d.Contains("openvpn") || d.Contains("proton") || d.Contains("nordlynx"))
-                    {
-                        vpn.Add(ni.Name);
-                    }
-                }
-                if (vpn.Count > 0)
+                // Раньше здесь просто перечислялись поднятые туннельные
+                // адаптеры со словами «если через них уходит весь трафик...».
+                // Это перекладывало на человека вопрос, на который может
+                // ответить система: маршрут до публичного адреса известен
+                // точно. Поднятый, но простаивающий туннель обходу не мешает,
+                // и пугать им незачем.
+                var egress = DescribeEgress();
+
+                if (egress.IsTunnel)
                 {
                     list.Add(new PreflightItem
                     {
                         Id = "vpn",
                         Level = "warn",
-                        Title = "Активны виртуальные адаптеры: " + string.Join(", ", vpn.ToArray()),
-                        Detail = "Если через них уходит весь трафик, он не проходит DPI " +
-                                 "провайдера, и обход становится лишним звеном."
+                        Title = "Трафик уходит через туннель «" + egress.Name + "»",
+                        Detail = "Это VPN или прокси-туннель. Он забирает весь трафик до того, " +
+                                 "как тот попадёт к провайдеру, поэтому обходить нечего: " +
+                                 "DPI провайдера такие пакеты не видит. Ядро обхода привязано к " +
+                                 (string.IsNullOrEmpty(egress.PhysName) ? "физической карте" : "карте «" + egress.PhysName + "»") +
+                                 " и внутрь туннеля не лезет. Чтобы обход заработал, выключите " +
+                                 "туннель либо настройте в нём раздельную маршрутизацию."
+                    });
+                }
+                else if (egress.PhysIfIdx == 0)
+                {
+                    list.Add(new PreflightItem
+                    {
+                        Id = "vpn",
+                        Level = "warn",
+                        Title = "Не удалось определить сетевую карту",
+                        Detail = "Ядро будет перехватывать пакеты на всех интерфейсах сразу. " +
+                                 "Если поднят VPN, обход может тронуть его трафик."
                     });
                 }
             }
@@ -1529,6 +1552,11 @@ namespace Zapret2App
 
         private void SendPreflight()
         {
+            // Интерфейс нужен интерфейсу приложения до запуска ядра: он
+            // подставляет --wf-iface в командную строку, и показанная команда
+            // должна совпадать с той, что выполнится.
+            SendNetRoute();
+
             try
             {
                 var items = CollectPreflight();
@@ -2693,6 +2721,150 @@ namespace Zapret2App
                 SendLog("warn",
                     "Физический адаптер не найден, проверки пойдут обычным маршрутом. " +
                     "Если поднят VPN или туннель, результат будет про него, а не про вашего провайдера.", source);
+        }
+
+
+        // =================================================================
+        //  Куда на самом деле уходит трафик
+        //
+        //  Проверять «есть ли в системе туннельный адаптер» мало: адаптер
+        //  может быть поднят и при этом ничего не забирать. Значение имеет
+        //  одно — какой интерфейс выберет система для выхода в интернет.
+        //  Это решает таблица маршрутизации, и спросить её можно напрямую.
+        //
+        //  Зачем это ядру. WinDivert перехватывает пакеты на уровне IP,
+        //  включая те, что идут В туннельный адаптер, то есть ещё НЕ
+        //  зашифрованные. Без ограничения по интерфейсу winws резал бы
+        //  содержимое чужого туннеля: провайдер там всё равно ничего не
+        //  видит, пользы ноль, а испортить соединение можно. Поэтому ядру
+        //  передаётся --wf-iface с индексом физической карты.
+        // =================================================================
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        private static extern int GetBestInterfaceEx(byte[] sockaddr, out int bestIfIndex);
+
+        private class EgressInfo
+        {
+            /// <summary>Интерфейс, которым система пойдёт в интернет.</summary>
+            public int IfIdx;
+            public string Name = "";
+            /// <summary>Этот интерфейс — туннель (VPN, WireGuard, SOCKS-туннель).</summary>
+            public bool IsTunnel;
+            /// <summary>Физическая карта: к ней привязывается ядро и проверки.</summary>
+            public int PhysIfIdx;
+            public string PhysName = "";
+        }
+
+        /// <summary>Индекс интерфейса, которым система пойдёт к публичному адресу.</summary>
+        private static int GetEgressIfIndex()
+        {
+            try
+            {
+                // sockaddr_in для 1.1.1.1: AF_INET, порт 0, адрес, 8 нулей.
+                byte[] sa = new byte[16];
+                sa[0] = 2; // AF_INET
+                sa[4] = 1; sa[5] = 1; sa[6] = 1; sa[7] = 1;
+
+                int idx;
+                if (GetBestInterfaceEx(sa, out idx) == 0) return idx;
+            }
+            catch { }
+            return 0;
+        }
+
+        private static System.Net.NetworkInformation.NetworkInterface FindByIndex(int idx)
+        {
+            if (idx == 0) return null;
+            try
+            {
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    try
+                    {
+                        var p = ni.GetIPProperties();
+                        var v4 = p.GetIPv4Properties();
+                        if (v4 != null && v4.Index == idx) return ni;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        /// <summary>Физический сетевой интерфейс — тот же отбор, что и для проверок.</summary>
+        private static System.Net.NetworkInformation.NetworkInterface FindPhysicalInterface()
+        {
+            try
+            {
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                    if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                    if (LooksLikeTunnel(ni)) continue;
+
+                    var props = ni.GetIPProperties();
+                    bool hasGateway = false;
+                    foreach (var g in props.GatewayAddresses)
+                    {
+                        if (g.Address != null && g.Address.AddressFamily == AddressFamily.InterNetwork
+                            && !g.Address.Equals(IPAddress.Any)) { hasGateway = true; break; }
+                    }
+                    if (!hasGateway) continue;
+
+                    foreach (var ua in props.UnicastAddresses)
+                        if (ua.Address.AddressFamily == AddressFamily.InterNetwork) return ni;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private EgressInfo DescribeEgress()
+        {
+            var info = new EgressInfo();
+
+            int egress = GetEgressIfIndex();
+            var egressNi = FindByIndex(egress);
+            if (egressNi != null)
+            {
+                info.IfIdx = egress;
+                info.Name = egressNi.Name;
+                info.IsTunnel = LooksLikeTunnel(egressNi);
+            }
+
+            var phys = FindPhysicalInterface();
+            if (phys != null)
+            {
+                info.PhysName = phys.Name;
+                try { info.PhysIfIdx = phys.GetIPProperties().GetIPv4Properties().Index; }
+                catch { }
+            }
+
+            // Выход не через туннель — значит физическая карта и есть выход.
+            if (!info.IsTunnel && info.IfIdx != 0)
+            {
+                info.PhysIfIdx = info.IfIdx;
+                info.PhysName = info.Name;
+            }
+
+            return info;
+        }
+
+        /// <summary>Индекс, который уходит в --wf-iface. 0 — не ограничивать.</summary>
+        private int WfIfaceIndex()
+        {
+            var e = DescribeEgress();
+            return e.PhysIfIdx;
+        }
+
+        private void SendNetRoute()
+        {
+            var e = DescribeEgress();
+            SendToWeb(string.Format(
+                "{{\"type\":\"net_route\",\"ifIdx\":{0},\"name\":\"{1}\",\"isTunnel\":{2},\"physIfIdx\":{3},\"physName\":\"{4}\"}}",
+                e.IfIdx, JsonEscape(e.Name), e.IsTunnel ? "true" : "false",
+                e.PhysIfIdx, JsonEscape(e.PhysName)));
         }
 
         private class TuneProbe
