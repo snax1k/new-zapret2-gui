@@ -1,0 +1,221 @@
+﻿
+=================================================================
+ПРОГОН от 2026-09-22 01:26:41
+ПОМЕТКА ПОЛЬЗОВАТЕЛЯ: контрольный прогон: прокси ВКЛЮЧЁН, обход включён, multidisorder
+=================================================================
+
+--- 1. ОКРУЖЕНИЕ ---
+winws запущен: ДА, процессов 1
+приложение: Zapret2-GUI-v0.3.1-portable
+версия по маркеру: 0.3.1
+системный прокси: ProxyEnable=1 ProxyServer=127.0.0.1:10809
+  локальный прокси слушает: 127.0.0.1:10809  процесс xray
+  локальный прокси слушает: 127.0.0.1:10808  процесс xray
+адаптеры в состоянии Up:
+  ifIndex=20  Ethernet  (Realtek PCIe GbE Family Controller)
+  ifIndex=8  Tailscale  (Tailscale Tunnel)
+выход в интернет по таблице маршрутизации: ifIndex=20
+пробы привязаны к: 192.168.0.193 (Ethernet)
+
+--- 2. НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
+активный пресет: general-v72
+последняя командная строка ядра:
+  winws.exe --wf-iface=20 --wf-tcp=80,443,2053,2083,2087,2096,8443 --wf-udp=443,19294-19344,50000-65535 --debug --filter-udp=443 --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-general.txt" --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-user.txt" --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-google.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude-user.txt" --dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fake-quic=quic_initial_www_google_com.bin --new --filter-udp=19294-19344,50000-65535 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6 --new --filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=681 --dpi-desync-split-seqovl-pattern=tls_clienthello_www_google_com.bin --new --filter-tcp=443 --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-google.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude-user.txt" --ip-id=zero --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=681 --dpi-desync-split-seqovl-pattern=tls_clienthello_www_google_com.bin --new --filter-tcp=80,443 --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-general.txt" --hostlist="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-user.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude.txt" --hostlist-exclude="C:/Users/snax1k/AppData/Local/Zapret2-GUI/host-list/list-exclude-user.txt" --ip-id=zero --dpi-desync=multidisorder --dpi-desync-split-pos=1,midsld,host+1,sniext+1
+
+--- 3. ДОСТУПНОСТЬ (три попытки на цель, прямой путь) ---
+
+### discord.com   [главный сайт]
+  DNS: 162.159.136.232, 162.159.135.232, 162.159.138.232, 162.159.137.232, 162.159.128.233
+  TCP 162.159.136.232 — НЕ отвечает (таймаут, 4013 мс)
+  TCP 162.159.135.232 — установлено за 16 мс
+  TCP 162.159.138.232 — установлено за 17 мс
+  TCP 162.159.137.232 — установлено за 14 мс
+  TCP 162.159.128.233 — установлено за 14 мс
+  дальше работаем с 162.159.135.232
+  попытка 1: OK  TCP 14 мс, TLS 65 мс, cert=CN=discord.com
+  попытка 2: OK  TCP 14 мс, TLS 15 мс, cert=CN=discord.com
+  попытка 3: OK  TCP 16 мс, TLS 17 мс, cert=CN=discord.com
+  контроль с чужим именем: тоже провал через 19 мс (A call to SSPI failed, see inner exception.)
+
+### gateway.discord.gg   [веб-сокет, через него идёт вход]
+  DNS: 162.159.134.234, 162.159.136.234, 162.159.133.234, 162.159.130.234, 162.159.135.234
+  TCP 162.159.134.234 — установлено за 16 мс
+  TCP 162.159.136.234 — установлено за 13 мс
+  TCP 162.159.133.234 — установлено за 15 мс
+  TCP 162.159.130.234 — установлено за 14 мс
+  TCP 162.159.135.234 — установлено за 14 мс
+  дальше работаем с 162.159.134.234
+  попытка 1: OK  TCP 22 мс, TLS 59 мс, cert=CN=discord.gg
+  попытка 2: OK  TCP 14 мс, TLS 16 мс, cert=CN=discord.gg
+  попытка 3: OK  TCP 13 мс, TLS 14 мс, cert=CN=discord.gg
+  контроль с чужим именем: тоже провал через 18 мс (A call to SSPI failed, see inner exception.)
+
+### updates.discord.com   [обновления, с него начинается запуск]
+  DNS: 162.159.136.232, 162.159.135.232, 162.159.128.233, 162.159.137.232, 162.159.138.232
+  TCP 162.159.136.232 — НЕ отвечает (таймаут, 4006 мс)
+  TCP 162.159.135.232 — установлено за 14 мс
+  TCP 162.159.128.233 — установлено за 14 мс
+  TCP 162.159.137.232 — установлено за 14 мс
+  TCP 162.159.138.232 — установлено за 15 мс
+  дальше работаем с 162.159.135.232
+  попытка 1: OK  TCP 14 мс, TLS 49 мс, cert=CN=discord.com
+  попытка 2: OK  TCP 14 мс, TLS 19 мс, cert=CN=discord.com
+  попытка 3: OK  TCP 14 мс, TLS 16 мс, cert=CN=discord.com
+  контроль с чужим именем: тоже провал через 16 мс (A call to SSPI failed, see inner exception.)
+
+### cdn.discordapp.com   [картинки и вложения]
+  DNS: 162.159.134.233, 162.159.133.233, 162.159.135.233, 162.159.130.233, 162.159.129.233
+  TCP 162.159.134.233 — установлено за 14 мс
+  TCP 162.159.133.233 — установлено за 16 мс
+  TCP 162.159.135.233 — установлено за 15 мс
+  TCP 162.159.130.233 — установлено за 15 мс
+  TCP 162.159.129.233 — установлено за 14 мс
+  дальше работаем с 162.159.134.233
+  попытка 1: OK  TCP 15 мс, TLS 54 мс, cert=CN=discordapp.com
+  попытка 2: OK  TCP 16 мс, TLS 17 мс, cert=CN=discordapp.com
+  попытка 3: OK  TCP 17 мс, TLS 18 мс, cert=CN=discordapp.com
+  контроль с чужим именем: тоже провал через 17 мс (A call to SSPI failed, see inner exception.)
+
+### www.youtube.com   [для сравнения]
+  DNS: 142.251.156.4, 142.251.151.4, 142.251.154.4, 142.251.153.4, 142.251.155.4, 142.251.152.4, 142.251.150.4, 142.251.157.4
+  TCP 142.251.156.4 — установлено за 29 мс
+  TCP 142.251.151.4 — установлено за 29 мс
+  TCP 142.251.154.4 — установлено за 29 мс
+  TCP 142.251.153.4 — установлено за 30 мс
+  TCP 142.251.155.4 — установлено за 30 мс
+  TCP 142.251.152.4 — установлено за 32 мс
+  TCP 142.251.150.4 — установлено за 28 мс
+  TCP 142.251.157.4 — установлено за 31 мс
+  дальше работаем с 142.251.156.4
+  попытка 1: ПРОВАЛ  TCP 31 мс, оборвалось через 19201 мс
+             причина: Unable to read data from the transport connection: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+  попытка 2: ПРОВАЛ  TCP 34 мс, оборвалось через 19191 мс
+             причина: Unable to read data from the transport connection: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+  попытка 3: ПРОВАЛ  TCP 33 мс, оборвалось через 19190 мс
+             причина: Unable to read data from the transport connection: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond.
+  контроль с чужим именем: ОТВЕТИЛ за 57 мс -> режут именно по имени сайта
+
+--- 4. ЖУРНАЛ ЯДРА: интересные строки за последние минуты ---
+  2026-09-22 01:26:57.385 [info   ] [WinWS] multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.385 [info   ] [WinWS] normalized multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.387 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58025 dport=443 flags=AP seq=293112367 ack_seq=3252685165
+  2026-09-22 01:26:57.387 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58025 dport=443 flags=AF seq=293112418 ack_seq=3252685165
+  2026-09-22 01:26:57.399 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58025 dport=443 flags=AFP seq=293112367 ack_seq=3252685165
+  2026-09-22 01:26:57.402 [info   ] [WinWS] IP4: 162.159.134.233 => 192.168.0.193 proto=tcp ttl=58 sport=443 dport=58025 flags=AF seq=3252685165 ack_seq=293112419
+  2026-09-22 01:26:57.800 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=S seq=246253039 ack_seq=0
+  2026-09-22 01:26:57.800 [info   ] [WinWS] desync profile search for tcp target=162.159.134.233:443 l7proto=unknown ssid='' hostname=''
+  2026-09-22 01:26:57.816 [info   ] [WinWS] IP4: 162.159.134.233 => 192.168.0.193 proto=tcp ttl=58 sport=443 dport=58027 flags=SA seq=2634373916 ack_seq=246253040
+  2026-09-22 01:26:57.818 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=AP seq=246253040 ack_seq=2634373917
+  2026-09-22 01:26:57.818 [info   ] [WinWS] hostname: cdn.discordapp.com
+  2026-09-22 01:26:57.818 [info   ] [WinWS] desync profile search for tcp target=162.159.134.233:443 l7proto=tls ssid='' hostname='cdn.discordapp.com'
+  2026-09-22 01:26:57.819 [info   ] [WinWS] dpi desync src=192.168.0.193:58027 dst=162.159.134.233:443
+  2026-09-22 01:26:57.819 [info   ] [WinWS] multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.819 [info   ] [WinWS] normalized multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.835 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=AP seq=246253040 ack_seq=2634373917
+  2026-09-22 01:26:57.835 [info   ] [WinWS] hostname: cdn.discordapp.com
+  2026-09-22 01:26:57.835 [info   ] [WinWS] dpi desync src=192.168.0.193:58027 dst=162.159.134.233:443
+  2026-09-22 01:26:57.835 [info   ] [WinWS] multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.835 [info   ] [WinWS] normalized multisplit pos: 1 97 102 110 
+  2026-09-22 01:26:57.836 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=AP seq=246253412 ack_seq=2634374032
+  2026-09-22 01:26:57.837 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=AF seq=246253463 ack_seq=2634374032
+  2026-09-22 01:26:57.850 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58027 dport=443 flags=AFP seq=246253412 ack_seq=2634374032
+  2026-09-22 01:26:57.851 [info   ] [WinWS] IP4: 162.159.134.233 => 192.168.0.193 proto=tcp ttl=58 sport=443 dport=58027 flags=AF seq=2634374032 ack_seq=246253464
+  2026-09-22 01:26:58.249 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58028 dport=443 flags=S seq=1241312070 ack_seq=0
+  2026-09-22 01:26:58.249 [info   ] [WinWS] desync profile search for tcp target=162.159.134.233:443 l7proto=unknown ssid='' hostname=''
+  2026-09-22 01:26:58.264 [info   ] [WinWS] IP4: 162.159.134.233 => 192.168.0.193 proto=tcp ttl=58 sport=443 dport=58028 flags=SA seq=3627309096 ack_seq=1241312071
+  2026-09-22 01:26:58.266 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58028 dport=443 flags=AP seq=1241312071 ack_seq=3627309097
+  2026-09-22 01:26:58.266 [info   ] [WinWS] hostname: www.microsoft.com
+  2026-09-22 01:26:58.266 [info   ] [WinWS] desync profile search for tcp target=162.159.134.233:443 l7proto=tls ssid='' hostname='www.microsoft.com'
+  2026-09-22 01:26:58.283 [info   ] [WinWS] IP4: 192.168.0.193 => 162.159.134.233 proto=tcp ttl=128 sport=58028 dport=443 flags=AF seq=1241312250 ack_seq=3627309104
+  2026-09-22 01:26:58.284 [info   ] [WinWS] IP4: 162.159.134.233 => 192.168.0.193 proto=tcp ttl=58 sport=443 dport=58028 flags=AF seq=3627309104 ack_seq=1241312250
+  2026-09-22 01:26:58.694 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:26:58.695 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:26:58.695 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:26:58.695 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:26:58.947 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:26:58.947 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:26:58.947 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:26:58.947 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:26:59.257 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:26:59.257 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:26:59.257 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:26:59.257 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:26:59.861 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:26:59.861 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:26:59.861 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:26:59.861 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:01.065 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:01.065 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:27:01.065 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:01.065 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:03.479 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:03.479 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:27:03.479 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:03.479 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:08.292 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:08.292 [info   ] [WinWS] dpi desync src=192.168.0.193:58037 dst=142.251.156.4:443
+  2026-09-22 01:27:08.292 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:08.292 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:18.380 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:18.381 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:18.381 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:18.381 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:18.637 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:18.637 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:18.637 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:18.637 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:18.948 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:18.948 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:18.948 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:18.948 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:19.550 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:19.550 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:19.550 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:19.550 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:20.758 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:20.758 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:20.758 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:20.758 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:23.158 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:23.158 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:23.158 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:23.158 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:27.964 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:27.964 [info   ] [WinWS] dpi desync src=192.168.0.193:58040 dst=142.251.156.4:443
+  2026-09-22 01:27:27.964 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:27.964 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:38.040 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:38.042 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:38.042 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:38.042 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:38.301 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:38.301 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:38.301 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:38.301 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:38.610 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:38.610 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:38.610 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:38.610 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:38.901 [info   ] [WinWS] hostname: api.epicgames.dev
+  2026-09-22 01:27:39.215 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:39.216 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:39.216 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:39.216 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:39.519 [info   ] [WinWS] IP4: 44.208.102.177 => 192.168.0.193 proto=tcp ttl=244 sport=443 dport=57886 flags=R seq=4128840404 ack_seq=0
+  2026-09-22 01:27:39.541 [info   ] [WinWS] hostname: datarouter.ol.epicgames.com
+  2026-09-22 01:27:40.417 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:40.417 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:40.417 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:40.417 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:42.817 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:42.817 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:42.817 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:42.817 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:47.622 [info   ] [WinWS] hostname: www.youtube.com
+  2026-09-22 01:27:47.622 [info   ] [WinWS] dpi desync src=192.168.0.193:58041 dst=142.251.156.4:443
+  2026-09-22 01:27:47.622 [info   ] [WinWS] multisplit pos: 1 
+  2026-09-22 01:27:47.622 [info   ] [WinWS] normalized multisplit pos: 1 
+  2026-09-22 01:27:57.707 [info   ] [WinWS] hostname: www.microsoft.com
+
+КОНЕЦ ПРОГОНА. Файл: C:\Users\snax1k\Documents\Мои проекты\New Zapret2\scripts\diag\claude-info.txt
+=================================================================
