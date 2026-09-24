@@ -95,3 +95,6 @@ release-*/*.exe
 # пользователя, в репозитории ему не место.
 scripts/diag/claude-info.txt
 scripts/diag/claude-tune.txt
+
+# Промежуточный результат capture-chrome-hello.ps1
+src-native/chrome-hello.b64.txt

@@ -974,7 +974,10 @@ namespace Zapret2App
         private const int ClientInitTimeoutMs = 10000;
         private const int WsConnectTimeoutMs = 7000;
         private const int TcpFallbackTimeoutMs = 10000;
-        private const int CfConnectTimeoutMs = 10000;
+        /// <summary>Сколько ждать один запасной узел.</summary>
+        private const int CfNodeTimeoutMs = 3500;
+        /// <summary>Сколько перебирать запасные узлы на одно соединение.</summary>
+        private const int CfBudgetMs = 8000;
         private const string WsPath = "/apiws";
         private const string FrontingSni = "sprinthost.ru";
 
@@ -1295,6 +1298,18 @@ namespace Zapret2App
                     return;
                 }
 
+                // Адрес только что не ответил по TCP — прямое соединение с ним
+                // заведомо упрётся в тот же таймаут и задержит клиента ещё на
+                // десять секунд. Быстрый отказ лучше: Telegram переподключится
+                // сразу и попадёт на другой узел.
+                if (target != null && IsCoolingDown(target))
+                {
+                    Interlocked.Increment(ref cFailed);
+                    Log("warn", "[" + label + "] ДЦ" + dc + mediaTag +
+                        ": запасные узлы не ответили, а адрес дата-центра закрыт — соединение сброшено, клиент переподключится.");
+                    return;
+                }
+
                 string dst;
                 if (!DcFallbackIps.TryGetValue(dc, out dst))
                 {
@@ -1443,17 +1458,29 @@ namespace Zapret2App
             }
             order.AddRange(rest);
 
-            // Перебирать двадцать узлов на каждое соединение нельзя — клиент
-            // не дождётся. Трёх попыток достаточно: если не отвечают три
-            // разных узла, дело не в них.
-            int attempts = order.Count < 3 ? order.Count : 3;
-            for (int i = 0; i < attempts; i++)
+            // Перебор ограничен временем, а не числом узлов. Узлы нередко
+            // отвечают «503 Service Unavailable» — быстро, за 100-300 мс, и
+            // тот же узел через пару секунд снова работает. При лимите в три
+            // попытки три таких ответа подряд срывали соединение, хотя за
+            // секунду нашёлся бы живой узел. Таймаут же стоит 10 с, и после
+            // него перебирать дальше клиент уже не дождётся.
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < order.Count; i++)
             {
+                if (i > 0 && budget.ElapsedMilliseconds > CfBudgetMs) break;
                 string domain = "kws" + dc + "." + order[i];
                 try
                 {
                     Log("info", "[" + label + "] ДЦ" + dc + mediaTag + " -> обход через " + domain);
-                    RawWebSocket ws = RawWebSocket.Connect(domain, domain, domain, WsPath, CfConnectTimeoutMs);
+                    // Живой узел отвечает быстрее секунды, отказ «503» — за
+                    // 100-300 мс. Узел, который принял соединение и молчит,
+                    // ждать дольше нескольких секунд незачем: однажды такой
+                    // съел весь бюджет, остальные узлы так и не попробовали,
+                    // и клиент сорвался через 18 с. Ожидание к тому же не
+                    // выходит за общий бюджет.
+                    int left = CfBudgetMs - (int)budget.ElapsedMilliseconds;
+                    int timeout = Math.Min(CfNodeTimeoutMs, Math.Max(1500, left));
+                    RawWebSocket ws = RawWebSocket.Connect(domain, domain, domain, WsPath, timeout);
                     lock (gate) cfDomainForDc[dc] = order[i];
                     return ws;
                 }

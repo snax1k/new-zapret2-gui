@@ -2885,7 +2885,8 @@ namespace Zapret2App
         }
 
         /// <summary>
-        /// Версия TLS для всех проверочных соединений.
+        /// Версия TLS для проверок через SslStream — вкладка «Диагностика».
+        /// Автоподбор с 0.3.3 шлёт приветствие браузера (ChromeHello).
         /// </summary>
         /// <remarks>
         /// Без явного указания .NET Framework в exe, собранном csc без атрибута
@@ -3042,54 +3043,17 @@ namespace Zapret2App
             }
         }
 
-        /// <summary>Тихая проверка TLS: ничего не шлёт в интерфейс, только результат.</summary>
+
         /// <summary>
-        /// Совпадает ли имя из сертификата с запрошенным хостом.
+        /// Одна проба: TCP и приветствие браузера с настоящим именем сайта.
+        /// Успех — ServerHello, повторивший наш номер сессии.
         /// </summary>
         /// <remarks>
-        /// Рукопожатие само по себе успехом не считается: завершить его может
-        /// и промежуточное устройство со своим сертификатом. Проверка имени
-        /// доказывает, что мы дошли до настоящего сервера.
+        /// Сертификат здесь не сверяется: в TLS 1.3 он зашифрован, а полное
+        /// рукопожатие ради него удвоило бы время подбора. Заглушку провайдера
+        /// отсекает повтор номера сессии — его знает только тот, кто получил
+        /// наше приветствие.
         ///
-        /// Сверка нестрогая и намеренно: полноценная проверка цепочки здесь
-        /// не нужна и только добавила бы ложных провалов на корпоративных
-        /// машинах. Нас интересует одно — не подменили ли нам собеседника.
-        /// </remarks>
-        private static bool CertNameMatches(string subject, string host)
-        {
-            if (string.IsNullOrEmpty(subject) || string.IsNullOrEmpty(host)) return false;
-
-            string cn = null;
-            foreach (string part in subject.Split(','))
-            {
-                string p = part.Trim();
-                if (p.StartsWith("CN=", StringComparison.OrdinalIgnoreCase)) { cn = p.Substring(3).Trim(); break; }
-            }
-            if (string.IsNullOrEmpty(cn)) return false;
-
-            host = host.ToLowerInvariant();
-            cn = cn.ToLowerInvariant();
-
-            if (cn == host) return true;
-            if (cn.StartsWith("*."))
-            {
-                string bare = cn.Substring(2);
-                // *.discord.com подходит и самому discord.com, и его поддоменам.
-                if (host == bare) return true;
-                if (host.EndsWith("." + bare)) return true;
-            }
-            // discord.gg выдаёт сертификат на discord.gg для gateway.discord.gg.
-            return host.EndsWith("." + cn);
-        }
-
-        /// <summary>
-        /// Одна проба: TCP, рукопожатие TLS с настоящим именем и сверка
-        /// сертификата. Возвращает true только если дошли до нужного сервера.
-        /// </summary>
-        /// <summary>
-        /// Проба TLS с разбором, что именно произошло.
-        /// </summary>
-        /// <remarks>
         /// Локальный порт регистрируется в <see cref="tuneTraces"/> сразу после
         /// установки TCP — до того, как уйдёт ClientHello. Тогда строки ядра
         /// об этом соединении попадут в отчёт, и будет видно главное: видело ли
@@ -3113,32 +3077,38 @@ namespace Zapret2App
                     try { tr.Port = ((IPEndPoint)tcp.Client.LocalEndPoint).Port; } catch { }
                     if (tr.Port > 0) tuneTraces[tr.Port] = tr;
 
-                    using (var ssl = new SslStream(tcp.GetStream(), false, (a, b, c, d) => true))
+                    // Приветствие настоящего Chromium, а не .NET: см. ChromeHello.cs.
+                    // Ждём только ServerHello — полное рукопожатие не нужно,
+                    // вопрос один: пропустил ли DPI приветствие к серверу.
+                    byte[] sid;
+                    byte[] hello = ChromeHello.Build(pr.Host, out sid);
+                    var stream = tcp.GetStream();
+                    await stream.WriteAsync(hello, 0, hello.Length);
+
+                    var buf = new byte[4096];
+                    int n = 0;
+                    while (n < ChromeHello.ResponseNeeded)
                     {
-                        var tls = ssl.AuthenticateAsClientAsync(pr.Host, null, ProbeTls, false);
-                        if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls)
+                        int left = tlsMs - (int)sw.ElapsedMilliseconds;
+                        var read = stream.ReadAsync(buf, n, buf.Length - n);
+                        if (left <= 0 || await Task.WhenAny(read, Task.Delay(left)) != read)
                         {
-                            tr.Result = "TLS завис, ответа нет за " + sw.ElapsedMilliseconds + " мс";
+                            tr.Result = n == 0
+                                ? "ответа нет за " + sw.ElapsedMilliseconds + " мс"
+                                : "ответ оборвался на " + n + " байтах за " + sw.ElapsedMilliseconds + " мс";
                             return tr;
                         }
-                        await tls;
-
-                        string subject = null;
-                        try { if (ssl.RemoteCertificate != null) subject = ssl.RemoteCertificate.Subject; }
-                        catch { }
-
-                        if (!CertNameMatches(subject, pr.Host))
-                        {
-                            SendLog("warn",
-                                "Рукопожатие с " + pr.Host + " прошло, но сертификат выписан на «" +
-                                (subject ?? "неизвестно") + "» — это не тот сервер.", "Autotune");
-                            tr.Result = "чужой сертификат: " + (subject ?? "неизвестно");
-                            return tr;
-                        }
-                        tr.Ok = true;
-                        tr.Result = "OK за " + sw.ElapsedMilliseconds + " мс";
-                        return tr;
+                        int got = await read;
+                        if (got <= 0) break;
+                        n += got;
+                        // Не TLS-запись — дальше ждать бессмысленно, разберём как есть.
+                        if (buf[0] != 0x16 && n >= 7) break;
                     }
+
+                    string verdict;
+                    tr.Ok = ChromeHello.Judge(buf, n, sid, out verdict);
+                    tr.Result = (tr.Ok ? "OK, " : "") + verdict + " за " + sw.ElapsedMilliseconds + " мс";
+                    return tr;
                 }
             }
             catch (Exception ex)
@@ -3297,6 +3267,8 @@ namespace Zapret2App
             }
             IPAddress probeBind = FindPhysicalLocalAddress();
             TuneReport("Пробы привязаны к: " + (probeBind != null ? probeBind.ToString() : "НЕ ПРИВЯЗАНЫ"));
+            TuneReport("Проба: приветствие " + ChromeHello.Origin + ", " + ChromeHello.TemplateSize +
+                " байт; успех — ServerHello с нашим номером сессии.");
 
             Task.Run(async () =>
             {
@@ -3416,12 +3388,32 @@ namespace Zapret2App
                         var weak = new System.Collections.Generic.List<string>();
                         var sw = Stopwatch.StartNew();
 
-                        foreach (var pr in probes)
+                        for (int t = 0; t < probes.Count; t++)
                         {
                             if (autotuneCancel) break;
+                            var pr = probes[t];
                             int ok = await ProbeTarget(pr, AutotuneAttempts);
                             passed += ok;
                             if (ok < AutotuneAttempts) weak.Add(pr.Host + ": " + ok + " из " + AutotuneAttempts);
+
+                            // Цель не открылась ни разу — вариант не годится, и
+                            // остальные цели проверять незачем. Все они нужны
+                            // одновременно: клиент Discord без discord.com
+                            // застревает на заставке, как бы ни работал шлюз.
+                            // Каждая такая цель стоила 12 секунд ожидания, и
+                            // подбор на восемь вариантов шёл почти пять минут —
+                            // новичок столько не ждёт. Эталон тоже обрывается:
+                            // одной закрытой цели достаточно, чтобы понять,
+                            // что блокировка есть.
+                            if (ok == 0 && t + 1 < probes.Count)
+                            {
+                                for (int r = t + 1; r < probes.Count; r++)
+                                {
+                                    weak.Add(probes[r].Host + ": не проверялась");
+                                }
+                                TuneReport("    остальные цели не проверялись: " + pr.Host + " не открылся ни разу");
+                                break;
+                            }
                         }
                         sw.Stop();
 

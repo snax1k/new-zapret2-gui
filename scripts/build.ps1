@@ -152,7 +152,9 @@ $cscArgs = @(
     "/resource:$loader,WebView2Loader.dll",
     "src-native\NativeApp.cs",
     # Прокси Telegram: мост MTProto → WebSocket, живёт отдельно от ядра winws.
-    "src-native\TgProxy.cs"
+    "src-native\TgProxy.cs",
+    # Приветствие Chromium для проб автоподбора.
+    "src-native\ChromeHello.cs"
 )
 
 & $csc $cscArgs
