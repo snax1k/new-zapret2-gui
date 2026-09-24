@@ -248,8 +248,18 @@ foreach ($t in $targets) {
         Start-Sleep -Milliseconds 400
     }
 
-    # контроль: то же соединение, но с чужим именем
-    $ctl = TlsProbe $ip "www.microsoft.com" 6000
+    # контроль: то же соединение, но с чужим именем.
+    #
+    # Имя должно быть таким, которое этот сервер действительно обслуживает,
+    # иначе провал контроля ничего не значит. Раньше тут стоял
+    # www.microsoft.com, и адреса Discord отвечали на него отказом за 15 мс —
+    # Cloudflare просто не держит чужой сайт. Выглядело как «тоже провал»,
+    # хотя канал был жив. Для адресов Cloudflare берём его собственное имя.
+    $ctlName = "www.microsoft.com"
+    if ($ip.StartsWith("162.159.") -or $ip.StartsWith("104.16.") -or $ip.StartsWith("172.64.")) {
+        $ctlName = "www.cloudflare.com"
+    }
+    $ctl = TlsProbe $ip $ctlName 6000
     if ($ctl.Ok) {
         W ("  контроль с чужим именем: ОТВЕТИЛ за " + $ctl.TlsMs + " мс -> режут именно по имени сайта")
     } else {

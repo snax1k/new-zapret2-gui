@@ -94,3 +94,4 @@ release-*/*.exe
 # Отчёт диагностики: содержит адреса и имена сайтов с машины
 # пользователя, в репозитории ему не место.
 scripts/diag/claude-info.txt
+scripts/diag/claude-tune.txt
