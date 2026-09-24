@@ -2,6 +2,7 @@ import React from 'react';
 import { Wand2, X, Loader2, CheckCircle2, XCircle, Circle, Play, Square } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { findYoutubeStrategy } from '../lib/zapretCommand';
+import { summarizeAutotune } from '../lib/autotune';
 import { StrategyGroup } from '../types';
 
 
@@ -34,30 +35,15 @@ export const AutotuneModal: React.FC = () => {
 
   const onClose = () => setIsAutotuneModalOpen(false);
 
-  const finished = autotuneRows.filter(r => r.phase === 'done');
-  // Эталон — не стратегия, применять его нельзя: это ответ на вопрос
-  // «а блокируют ли вообще».
-  const baseline = autotuneRows.find(r => r.id === 'off');
-  const strategies = finished.filter(r => r.id !== 'off');
-
-  // Ранжирование по числу успешных проб, а НЕ по времени.
-  //
-  // Раньше здесь стояло sort((a, b) => a.ms - b.ms), и побеждал самый
-  // быстрый. Это неверно в корне: быстрый ответ часто означает быстрый
-  // отказ. На живом замере блокировка по имени сайта отвечала за 38 мс
-  // сбросом, а успешное соединение занимало 300 мс. Время оставлено только
-  // как разделитель при равном счёте.
-  const winners = strategies
-    .filter(r => r.passed > 0)
-    .sort((a, b) => (b.passed - a.passed) || (a.ms - b.ms));
-
-  const best = winners[0];
-  const bestIsFull = !!best && best.ok;
+  // Вывод общий с мастером первого запуска — см. lib/autotune.ts.
+  const summary = summarizeAutotune(autotuneRows);
+  const best = summary.best;
+  const bestIsFull = summary.kind === 'found';
+  const baselineClean = summary.kind === 'not-needed';
 
   // Перебор может закончиться раньше списка: если эталон прошёл, остальные
   // варианты не гоняются. Поэтому итог показываем по факту остановки.
-  const allDone = finished.length > 0 && !isAutotuneRunning;
-  const baselineClean = !!baseline && baseline.phase === 'done' && baseline.ok;
+  const allDone = summary.done > 0 && !isAutotuneRunning;
 
   // Группы подбираются раздельно, потому что провайдеры ведут себя с
   // YouTube и с Discord по-разному: у одного и того же человека для YouTube
@@ -91,7 +77,7 @@ export const AutotuneModal: React.FC = () => {
             <div>
               <h3 className="text-sm font-bold">Автоподбор стратегии</h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Ядро поднимается с каждым вариантом, затем идёт проверка TCP + TLS
+                Ядро поднимается с каждым вариантом, затем идёт соединение как у браузера
               </p>
             </div>
           </div>
@@ -231,10 +217,15 @@ export const AutotuneModal: React.FC = () => {
                 работает, дело не в DPI: посмотрите плашку окружения на главной
                 (прокси, VPN) и перезапустите сам Discord — у него свой кэш.
               </>
-            ) : bestIsFull ? (
+            ) : bestIsFull && best ? (
               <>
                 <b>Подошло: «{best.label}».</b> Успешных проб {best.passed} из {best.total},
                 без единого срыва. Нажмите «Применить» в его строке.
+              </>
+            ) : summary.kind === 'empty' ? (
+              <>
+                <b>Проверка остановлена раньше, чем что-то выяснилось.</b> Варианты
+                обхода не проверялись — запустите подбор заново и дождитесь конца.
               </>
             ) : best ? (
               <>

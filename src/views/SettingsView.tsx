@@ -20,7 +20,8 @@ import {
   Palette,
   Flame,
   Image as ImageIcon,
-  Eraser
+  Eraser,
+  Wand2
 } from 'lucide-react';
 import { useApp, BUNDLED_CORE_VERSION } from '../context/AppContext';
 import { ACCENTS, BACKGROUNDS, buildSurfaceRamp } from '../lib/theme';
@@ -50,6 +51,7 @@ const formatChecked = (iso: string): string => {
 
 export const SettingsView: React.FC = () => {
   const {
+    openWizard,
     addLog,
     stats,
     theme,
@@ -122,6 +124,30 @@ export const SettingsView: React.FC = () => {
       </div>
 
       <div className="space-y-4">
+        {/* Мастер настройки — повторный запуск */}
+        <div className={`p-4 rounded-xl border flex items-center gap-4 ${
+          theme === 'dark'
+            ? 'bg-gradient-to-r from-indigo-950/50 to-slate-900/60 border-indigo-500/25'
+            : 'bg-gradient-to-r from-indigo-50 to-white border-indigo-200 shadow-xs'
+        }`}>
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/15 text-indigo-500 flex items-center justify-center shrink-0">
+            <Wand2 className="w-5 h-5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-bold text-slate-900 dark:text-slate-100">Мастер настройки</div>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Заново проверит компьютер, подберёт обход для Discord и YouTube и поможет включить
+              мост для Telegram. Пригодится, если сменили провайдера или что-то перестало открываться.
+            </p>
+          </div>
+          <button
+            onClick={openWizard}
+            className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors shrink-0"
+          >
+            Запустить мастер
+          </button>
+        </div>
+
         {/* 0. Оформление */}
         <div className={`p-4 rounded-xl border space-y-3.5 ${
           theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'

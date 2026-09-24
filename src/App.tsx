@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { UpdateModal } from './components/UpdateModal';
 import { CreatePresetModal } from './components/CreatePresetModal';
 import { AutotuneModal } from './components/AutotuneModal';
+import { SetupWizard } from './components/SetupWizard';
 import { DashboardView } from './views/DashboardView';
 import { PresetsView } from './views/PresetsView';
 import { HostlistsView } from './views/HostlistsView';
@@ -75,6 +76,9 @@ export const App: React.FC = () => {
 
       {/* Автоподбор стратегии — открывается и с главной, и из «Пресетов» */}
       <AutotuneModal />
+
+      {/* Мастер первого запуска — сам при первом запуске, потом из «Настроек» */}
+      <SetupWizard />
 
       {/* Tray Toast Notification */}
       {showTrayToast && (

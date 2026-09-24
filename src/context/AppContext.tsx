@@ -45,7 +45,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.3.3';
+export const APP_VERSION = '0.4.0';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -58,6 +58,11 @@ const UPDATE_CHECK_KEY = 'zapret2_update_checked_v1';
 const UPDATE_AUTO_KEY = 'zapret2_update_auto_v1';
 /** Настройки прокси Telegram одним объектом: порт, секрет, режимы. */
 const TG_SETTINGS_KEY = 'zapret2_tgproxy_v1';
+/**
+ * Мастер первого запуска: пройден или пропущен, и в какой версии.
+ * Пока ключа нет, мастер открывается при каждом запуске.
+ */
+const WIZARD_KEY = 'zapret2_wizard_v1';
 /**
  * Чаще раза в шесть часов дёргать GitHub незачем: у неавторизованных
  * запросов лимит 60 в час на адрес, а релизы выходят не ежечасно.
@@ -337,6 +342,19 @@ interface AppContextType {
   updateInfo: UpdateInfo;
   /** silent — автопроверка при запуске: без модалки и без лишних записей в лог. */
   checkForUpdates: (silent?: boolean) => void;
+  /** Мастер первого запуска. */
+  isWizardOpen: boolean;
+  openWizard: () => void;
+  /** done — прошёл до конца, skipped — закрыл раньше. Больше сам не откроется. */
+  closeWizard: (outcome: 'done' | 'skipped') => void;
+  /**
+   * У человека уже были настройки до мастера — он обновился с прежней
+   * версии. Мастер говорит с ним иначе: объясняет, зачем проходить заново.
+   */
+  isReturningUser: boolean;
+  /** Мастер открыт вручную из «Настроек», а не сам при запуске. */
+  isWizardRerun: boolean;
+
   /** Прокси Telegram: состояние моста и его настройки. */
   tgProxy: TgProxyState;
   tgSettings: TgProxySettings;
@@ -423,6 +441,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     saveSetting(UPDATE_AUTO_KEY, v ? 'on' : 'off');
     setAutoCheckUpdatesState(v);
   };
+  // ---- Мастер первого запуска --------------------------------------
+  //
+  // Открывается сам, пока его не прошли и не пропустили. Решение хранится
+  // в settings.json вместе с остальными настройками, поэтому обновление
+  // программы мастер заново не открывает.
+  const [isWizardOpen, setIsWizardOpen] = useState<boolean>(() => !loadSetting(WIZARD_KEY));
+  // Считается один раз, до того как эффекты успеют что-то сохранить:
+  // иначе при первом же запуске человек выглядел бы «вернувшимся».
+  const [isReturningUser] = useState<boolean>(() =>
+    ['zapret2_theme_v5', 'zapret2_toggles_v5', 'zapret2_active_preset_v5', UPDATE_CHECK_KEY]
+      .some(k => loadSetting(k) !== null)
+  );
+  // Открытый вручную мастер говорит иначе: человек не обновлялся и не
+  // впервые здесь — он сам решил перенастроить.
+  const [isWizardRerun, setIsWizardRerun] = useState(false);
+  const openWizard = () => {
+    setIsWizardRerun(true);
+    setIsWizardOpen(true);
+  };
+
   // ---- Прокси Telegram ----------------------------------------------
   //
   // Мост живёт в нативной части и к ядру winws отношения не имеет: обход
@@ -1005,6 +1043,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [status]);
 
   /** Сохраняет переключатели и, если ядро запущено, перезапускает его. */
+  const closeWizard = (outcome: 'done' | 'skipped') => {
+    saveSetting(WIZARD_KEY, `${outcome}|${APP_VERSION}`);
+    setIsWizardOpen(false);
+    addLog(
+      'info',
+      outcome === 'done' ? 'Мастер настройки пройден.' : 'Мастер настройки закрыт. Открыть снова — «Настройки».',
+      'Wizard'
+    );
+  };
+
   // ---- Действия прокси Telegram --------------------------------------
 
   /**
@@ -1694,6 +1742,11 @@ const parseReleaseHighlights = (body: string): string[] => {
         isDiagnosticsRunning,
         updateInfo,
         checkForUpdates,
+        isWizardOpen,
+        openWizard,
+        closeWizard,
+        isReturningUser,
+        isWizardRerun,
         tgProxy,
         tgSettings,
         setTgSettings,
