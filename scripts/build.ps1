@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.3.1"
+    [string]$Version = "0.3.2"
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,7 +150,9 @@ $cscArgs = @(
     "/resource:$refCore,Microsoft.Web.WebView2.Core.dll",
     "/resource:$refForms,Microsoft.Web.WebView2.WinForms.dll",
     "/resource:$loader,WebView2Loader.dll",
-    "src-native\NativeApp.cs"
+    "src-native\NativeApp.cs",
+    # Прокси Telegram: мост MTProto → WebSocket, живёт отдельно от ядра winws.
+    "src-native\TgProxy.cs"
 )
 
 & $csc $cscArgs

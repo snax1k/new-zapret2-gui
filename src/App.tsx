@@ -7,6 +7,7 @@ import { AutotuneModal } from './components/AutotuneModal';
 import { DashboardView } from './views/DashboardView';
 import { PresetsView } from './views/PresetsView';
 import { HostlistsView } from './views/HostlistsView';
+import { TgProxyView } from './views/TgProxyView';
 import { DiagnosticsView } from './views/DiagnosticsView';
 import { LogsView } from './views/LogsView';
 import { SettingsView } from './views/SettingsView';
@@ -24,6 +25,8 @@ export const App: React.FC = () => {
         return <PresetsView />;
       case 'hostlists':
         return <HostlistsView />;
+      case 'tgproxy':
+        return <TgProxyView />;
       case 'diagnostics':
         return <DiagnosticsView />;
       case 'logs':

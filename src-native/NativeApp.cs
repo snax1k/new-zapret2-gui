@@ -41,7 +41,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.3.1";
+        public const string AppVersion = "0.3.2";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -107,6 +107,17 @@ namespace Zapret2App
         /// <summary>Идёт автоподбор: статусы ядра в интерфейс не отправляются.</summary>
         private volatile bool autotuneRunning = false;
         private volatile bool autotuneCancel = false;
+
+        // ---- Прокси Telegram ---------------------------------------------
+        /// <summary>
+        /// Мост MTProto → WebSocket. К winws отношения не имеет и работает
+        /// независимо: обход может быть выключен, а прокси — поднят.
+        /// </summary>
+        private TgProxyServer tgProxy;
+        /// <summary>Отправка состояния прокси в интерфейс, пока он работает.</summary>
+        private System.Windows.Forms.Timer tgStatusTimer;
+        /// <summary>Текст последней ошибки запуска — показывается в интерфейсе.</summary>
+        private string tgLastError = "";
 
         [STAThread]
         public static void Main(string[] args)
@@ -3266,6 +3277,133 @@ namespace Zapret2App
             SendToWeb(json);
         }
 
+        // ---- Прокси Telegram ---------------------------------------------
+
+        /// <summary>
+        /// Поднять мост. Параметры приходят строкой host|port|secret|tcp|front —
+        /// разбирать ради пяти полей полноценный JSON смысла нет.
+        /// </summary>
+        private void StartTgProxy(string payload)
+        {
+            string[] p = payload.Split('|');
+            if (p.Length < 5)
+            {
+                tgLastError = "неполные параметры запуска";
+                SendTgStatus();
+                return;
+            }
+
+            string host = p[0] == "0.0.0.0" ? "0.0.0.0" : "127.0.0.1";
+            int port;
+            if (!int.TryParse(p[1], out port)) port = TgProxyServer.DefaultPort;
+            string secretHex = p[2];
+            bool allowTcp = p[3] == "1";
+            bool allowFront = p[4] == "1";
+            // Шестое поле добавилось позже: старая сохранённая строка без него
+            // не должна ронять запуск, поэтому по умолчанию включено.
+            bool allowCf = p.Length < 6 || p[5] == "1";
+
+            try
+            {
+                if (tgProxy == null)
+                {
+                    tgProxy = new TgProxyServer((level, message) => SendLog(level, message, "TgProxy"));
+                }
+                tgProxy.AllowDirectTcp = allowTcp;
+                tgProxy.AllowFronting = allowFront;
+                tgProxy.AllowCloudflare = allowCf;
+                tgProxy.Start(host, port, secretHex);
+                tgLastError = "";
+
+                if (tgStatusTimer == null)
+                {
+                    tgStatusTimer = new System.Windows.Forms.Timer();
+                    tgStatusTimer.Interval = 2000;
+                    tgStatusTimer.Tick += (s, e) => SendTgStatus();
+                }
+                tgStatusTimer.Start();
+            }
+            catch (Exception ex)
+            {
+                tgLastError = ex.Message;
+                SendLog("error", "Прокси Telegram не запустился: " + ex.Message, "TgProxy");
+            }
+            SendTgStatus();
+        }
+
+        private void StopTgProxy()
+        {
+            try { if (tgStatusTimer != null) tgStatusTimer.Stop(); } catch { }
+            try { if (tgProxy != null) tgProxy.Stop(); } catch { }
+            tgLastError = "";
+            SendTgStatus();
+        }
+
+        /// <summary>
+        /// Адрес, который надо писать в ссылку.
+        /// </summary>
+        /// <remarks>
+        /// При работе только на localhost это 127.0.0.1. Если слушатель открыт
+        /// в локальную сеть, в ссылке должен стоять адрес этой машины в сети —
+        /// иначе телефон по такой ссылке придёт сам к себе.
+        /// </remarks>
+        private string TgLinkHost()
+        {
+            if (tgProxy == null || tgProxy.BindHost != "0.0.0.0") return "127.0.0.1";
+            try
+            {
+                IPAddress local = FindPhysicalLocalAddress();
+                if (local != null) return local.ToString();
+            }
+            catch { }
+            return "127.0.0.1";
+        }
+
+        private void SendTgStatus()
+        {
+            bool running = tgProxy != null && tgProxy.IsRunning;
+            var st = tgProxy != null ? tgProxy.Snapshot() : new TgProxyStats();
+            string err = (tgLastError ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", " ");
+
+            string json = string.Format(
+                "{{\"type\":\"tg_status\",\"running\":{0},\"host\":\"{1}\",\"port\":{2},\"linkHost\":\"{3}\",\"error\":\"{4}\"," +
+                "\"stats\":{{\"total\":{5},\"active\":{6},\"bad\":{7},\"ws\":{8},\"cf\":{9},\"tcp\":{10},\"failed\":{11},\"bytesUp\":{12},\"bytesDown\":{13}}}}}",
+                running ? "true" : "false",
+                tgProxy != null ? tgProxy.BindHost : "127.0.0.1",
+                tgProxy != null ? tgProxy.BindPort : TgProxyServer.DefaultPort,
+                TgLinkHost(),
+                err,
+                st.Total, st.Active, st.Bad, st.ViaWs, st.ViaCf, st.ViaTcp, st.Failed, st.BytesUp, st.BytesDown);
+            SendToWeb(json);
+        }
+
+        /// <summary>
+        /// Отдать ссылку tg://proxy системе — её подхватит установленный клиент.
+        /// </summary>
+        /// <remarks>
+        /// Строка приходит из веб-слоя, поэтому проверяется дважды: и префикс,
+        /// и набор символов. Через оболочку уходит только то, что заведомо
+        /// является ссылкой на прокси, а не путём к программе.
+        /// </remarks>
+        private void OpenTgLink(string link)
+        {
+            if (link == null) return;
+            link = link.Trim();
+            if (!link.StartsWith("tg://proxy?", StringComparison.Ordinal)) return;
+            if (link.Length > 512) return;
+            foreach (char c in link)
+            {
+                bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+                    || c == ':' || c == '/' || c == '?' || c == '&' || c == '=' || c == '.' || c == '-' || c == '_';
+                if (!ok) return;
+            }
+            try { Process.Start(new ProcessStartInfo(link) { UseShellExecute = true }); }
+            catch (Exception ex)
+            {
+                SendLog("error", "Не удалось открыть ссылку в Telegram: " + ex.Message, "TgProxy");
+            }
+        }
+
         private void CoreWebView2_WebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
             try
@@ -3387,6 +3525,22 @@ namespace Zapret2App
                     {
                         RunAutotune(rawMsg.Substring("autotune:".Length));
                     }
+                    else if (rawMsg.StartsWith("tg_start:"))
+                    {
+                        StartTgProxy(rawMsg.Substring("tg_start:".Length));
+                    }
+                    else if (rawMsg == "tg_stop")
+                    {
+                        StopTgProxy();
+                    }
+                    else if (rawMsg == "tg_status")
+                    {
+                        SendTgStatus();
+                    }
+                    else if (rawMsg.StartsWith("tg_open:"))
+                    {
+                        OpenTgLink(rawMsg.Substring("tg_open:".Length));
+                    }
                     else if (rawMsg == "close")
                     {
                         isExiting = true;
@@ -3395,6 +3549,11 @@ namespace Zapret2App
                         // пропадают. Настройки мы теперь храним сами, но
                         // терять чужие данные молча всё равно неправильно.
                         try { if (webView != null) webView.Dispose(); } catch { }
+                        // Сессии прокси закрываются явно, а не вместе с
+                        // процессом: клиент Telegram получает нормальный
+                        // разрыв и переподключается сразу, а не по таймауту.
+                        try { if (tgStatusTimer != null) tgStatusTimer.Stop(); } catch { }
+                        try { if (tgProxy != null) tgProxy.Stop(); } catch { }
                         StopZapretProcess();
                         KillZombieWinDivert();
                         TryStopWinDivertService();
@@ -3457,6 +3616,8 @@ namespace Zapret2App
                 trayMenu.MenuItems.Add("-");
                 trayMenu.MenuItems.Add("Выход", (s, e) => {
                     isExiting = true;
+                    try { if (tgStatusTimer != null) tgStatusTimer.Stop(); } catch { }
+                    try { if (tgProxy != null) tgProxy.Stop(); } catch { }
                     StopZapretProcess();
                     KillZombieWinDivert();
                     TryStopWinDivertService();

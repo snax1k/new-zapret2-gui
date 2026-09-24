@@ -6,6 +6,7 @@ import {
   Activity,
   Terminal,
   Settings,
+  Send,
   Power,
   Layers,
   Sparkles,
@@ -16,12 +17,15 @@ import { useApp } from '../context/AppContext';
 import { TabType } from '../types';
 
 export const Sidebar: React.FC = () => {
-  const { activeTab, setActiveTab, status, stats, theme, updateInfo, dismissUpdate, setIsUpdateModalOpen, presets, hostlists } = useApp();
+  const { activeTab, setActiveTab, status, stats, theme, updateInfo, dismissUpdate, setIsUpdateModalOpen, presets, hostlists, tgProxy } = useApp();
 
   const navItems: { id: TabType; label: string; icon: React.ComponentType<{ className?: string }>; badge?: string }[] = [
     { id: 'dashboard', label: 'Главная', icon: Zap },
     { id: 'presets', label: 'Пресеты', icon: Sliders, badge: String(presets.length) },
     { id: 'hostlists', label: 'Хостлисты', icon: Globe, badge: hostlists.length ? String(hostlists.length) : undefined },
+    // Значок показывает, что мост поднят: Telegram лечится не обходом, а
+    // отдельным прокси, и его состояние не видно по статусу ядра.
+    { id: 'tgproxy', label: 'Телеграм — Прокси', icon: Send, badge: tgProxy.running ? 'вкл' : undefined },
     { id: 'diagnostics', label: 'Диагностика', icon: Activity },
     { id: 'logs', label: 'Консоль логов', icon: Terminal },
     { id: 'settings', label: 'Настройки', icon: Settings },

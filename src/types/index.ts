@@ -1,6 +1,6 @@
 export type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
-export type TabType = 'dashboard' | 'presets' | 'hostlists' | 'diagnostics' | 'logs' | 'settings';
+export type TabType = 'dashboard' | 'presets' | 'hostlists' | 'tgproxy' | 'diagnostics' | 'logs' | 'settings';
 
 export type EngineMode = 'windivert' | 'nfqws' | 'tpws';
 
@@ -232,4 +232,58 @@ export interface UpdateInfo {
   error: string;
   /** Когда последний раз удалось спросить GitHub. ISO, пусто — ещё ни разу. */
   lastCheckedAt: string;
+}
+
+/**
+ * Счётчики прокси Telegram, как их видит нативная часть.
+ *
+ * ws и tcp — это два разных пути до дата-центра. Веб-транспорт (ws) и есть
+ * обход; прямое соединение (tcp) — резерв, который работает только если
+ * провайдер дата-центры не закрыл. Если все сессии идут через tcp, обход
+ * фактически не нужен; если через ws — он и делает работу.
+ */
+export interface TgProxyStats {
+  /** Сколько соединений принято за время работы. */
+  total: number;
+  /** Сколько живёт прямо сейчас. */
+  active: number;
+  /** Отвергнуто: неверный секрет или чужой протокол. */
+  bad: number;
+  ws: number;
+  /** Через запасной узел за Cloudflare. */
+  cf: number;
+  tcp: number;
+  /** Не удалось довести ни одним путём. */
+  failed: number;
+  bytesUp: number;
+  bytesDown: number;
+}
+
+/** Состояние моста, приходит из нативной части каждые две секунды. */
+export interface TgProxyState {
+  running: boolean;
+  /** На каком адресе висит слушатель: 127.0.0.1 или 0.0.0.0. */
+  host: string;
+  port: number;
+  /** Что писать в ссылку: при доступе из сети это адрес машины в ней. */
+  linkHost: string;
+  error: string;
+  stats: TgProxyStats;
+}
+
+/** Настройки прокси, которые задаёт пользователь. */
+export interface TgProxySettings {
+  port: number;
+  /** Секрет в hex, 32 символа. Он же уходит в ссылку. */
+  secret: string;
+  /** Слушать 0.0.0.0 вместо localhost — чтобы подключить телефон в той же сети. */
+  lanAccess: boolean;
+  /** Поднимать мост вместе с программой. */
+  autoStart: boolean;
+  /** Разрешить прямое соединение с дата-центром, если веб-транспорт не прошёл. */
+  allowDirectTcp: boolean;
+  /** Пробовать чужое имя в TLS, если прямое рукопожатие не прошло. */
+  allowFronting: boolean;
+  /** Разрешить обход через запасные узлы за Cloudflare. */
+  allowCloudflare: boolean;
 }

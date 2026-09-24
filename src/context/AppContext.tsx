@@ -18,7 +18,9 @@ import {
   DiscordCacheItem,
   NetRoute,
   PreflightItem,
-  AutotuneRow
+  AutotuneRow,
+  TgProxyState,
+  TgProxySettings
 } from '../types';
 import {
   buildPresetArgs,
@@ -29,6 +31,12 @@ import {
 } from '../lib/zapretCommand';
 import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
 import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
+import {
+  buildTgLink,
+  generateTgSecret,
+  normalizeTgSettings,
+  DEFAULT_TG_SETTINGS
+} from '../lib/tgProxy';
 
 // Домены, к которым применяется обход. Хостлист-файл list-general.txt лежит
 // рядом с winws.exe (рабочий каталог процесса), поэтому путь указывается
@@ -37,7 +45,7 @@ import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.3.1';
+export const APP_VERSION = '0.3.2';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -48,6 +56,8 @@ const THEME_TINT_KEY = 'zapret2_theme_tint_v1';
 const UPDATE_CHECK_KEY = 'zapret2_update_checked_v1';
 /** Разрешена ли автопроверка при запуске. */
 const UPDATE_AUTO_KEY = 'zapret2_update_auto_v1';
+/** Настройки прокси Telegram одним объектом: порт, секрет, режимы. */
+const TG_SETTINGS_KEY = 'zapret2_tgproxy_v1';
 /**
  * Чаще раза в шесть часов дёргать GitHub незачем: у неавторизованных
  * запросов лимит 60 в час на адрес, а релизы выходят не ежечасно.
@@ -327,6 +337,17 @@ interface AppContextType {
   updateInfo: UpdateInfo;
   /** silent — автопроверка при запуске: без модалки и без лишних записей в лог. */
   checkForUpdates: (silent?: boolean) => void;
+  /** Прокси Telegram: состояние моста и его настройки. */
+  tgProxy: TgProxyState;
+  tgSettings: TgProxySettings;
+  setTgSettings: (patch: Partial<TgProxySettings>) => void;
+  startTgProxy: () => void;
+  stopTgProxy: () => void;
+  regenerateTgSecret: () => void;
+  /** Ссылка tg://proxy для текущих настроек. Пусто, пока мост не поднят. */
+  tgLink: string;
+  openTgLink: () => void;
+
   autoCheckUpdates: boolean;
   setAutoCheckUpdates: (v: boolean) => void;
   dismissUpdate: () => void;
@@ -402,6 +423,32 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     saveSetting(UPDATE_AUTO_KEY, v ? 'on' : 'off');
     setAutoCheckUpdatesState(v);
   };
+  // ---- Прокси Telegram ----------------------------------------------
+  //
+  // Мост живёт в нативной части и к ядру winws отношения не имеет: обход
+  // может быть выключен, а прокси — работать. Поэтому и состояние своё.
+  const [tgSettings, setTgSettingsState] = useState<TgProxySettings>(() => {
+    const saved = loadSetting(TG_SETTINGS_KEY);
+    if (!saved) return { ...DEFAULT_TG_SETTINGS, secret: generateTgSecret() };
+    try {
+      const parsed = normalizeTgSettings(JSON.parse(saved));
+      // Секрет мог не сохраниться или испортиться — без него ссылка
+      // бессмысленна, поэтому молча заводим новый.
+      return parsed.secret ? parsed : { ...parsed, secret: generateTgSecret() };
+    } catch {
+      return { ...DEFAULT_TG_SETTINGS, secret: generateTgSecret() };
+    }
+  });
+
+  const [tgProxy, setTgProxy] = useState<TgProxyState>({
+    running: false,
+    host: '127.0.0.1',
+    port: DEFAULT_TG_SETTINGS.port,
+    linkHost: '127.0.0.1',
+    error: '',
+    stats: { total: 0, active: 0, bad: 0, ws: 0, cf: 0, tcp: 0, failed: 0, bytesUp: 0, bytesDown: 0 }
+  });
+
   const [showTrayToast, setShowTrayToast] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string>(
     () => loadSetting('zapret2_active_preset_v5') || 'general-v72'
@@ -669,6 +716,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               isTunnel: !!data.isTunnel,
               physIfIdx: data.physIfIdx || 0,
               physName: data.physName || ''
+            });
+          } else if (data.type === 'tg_status') {
+            setTgProxy({
+              running: !!data.running,
+              host: data.host || '127.0.0.1',
+              port: data.port || DEFAULT_TG_SETTINGS.port,
+              linkHost: data.linkHost || '127.0.0.1',
+              error: data.error || '',
+              stats: {
+                total: data.stats?.total || 0,
+                active: data.stats?.active || 0,
+                bad: data.stats?.bad || 0,
+                ws: data.stats?.ws || 0,
+                cf: data.stats?.cf || 0,
+                tcp: data.stats?.tcp || 0,
+                failed: data.stats?.failed || 0,
+                bytesUp: data.stats?.bytesUp || 0,
+                bytesDown: data.stats?.bytesDown || 0
+              }
             });
           } else if (data.type === 'discord_scan') {
             setDiscordCache(Array.isArray(data.items) ? data.items : []);
@@ -939,6 +1005,61 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [status]);
 
   /** Сохраняет переключатели и, если ядро запущено, перезапускает его. */
+  // ---- Действия прокси Telegram --------------------------------------
+
+  /**
+   * Адрес, который попадёт в ссылку.
+   *
+   * Пока мост не поднят, брать его неоткуда: при доступе из локальной сети
+   * настоящий адрес машины знает только нативная часть. Поэтому до запуска
+   * показывается localhost, а после — то, что вернул мост.
+   */
+  const tgLink = tgProxy.running
+    ? buildTgLink(tgProxy.linkHost, tgProxy.port, tgSettings.secret)
+    : '';
+
+  const sendTgStart = (s: TgProxySettings) => {
+    if (!window.chrome?.webview) return;
+    const host = s.lanAccess ? '0.0.0.0' : '127.0.0.1';
+    window.chrome.webview.postMessage(
+      `tg_start:${host}|${s.port}|${s.secret}|${s.allowDirectTcp ? 1 : 0}|${s.allowFronting ? 1 : 0}|${s.allowCloudflare ? 1 : 0}`
+    );
+  };
+
+  const setTgSettings = (patch: Partial<TgProxySettings>) => {
+    setTgSettingsState(prev => {
+      const next = normalizeTgSettings({ ...prev, ...patch });
+      saveSetting(TG_SETTINGS_KEY, JSON.stringify(next));
+      // Слушатель уже поднят — перезапускаем с новыми параметрами, иначе
+      // изменения выглядели бы применёнными, но ни на что не влияли.
+      if (tgProxy.running) {
+        addLog('info', 'Параметры прокси изменились, перезапускаю мост...', 'TgProxy');
+        sendTgStart(next);
+      }
+      return next;
+    });
+  };
+
+  const startTgProxy = () => {
+    addLog('info', `Запускаю прокси Telegram на порту ${tgSettings.port}...`, 'TgProxy');
+    sendTgStart(tgSettings);
+  };
+
+  const stopTgProxy = () => {
+    if (window.chrome?.webview) window.chrome.webview.postMessage('tg_stop');
+  };
+
+  const regenerateTgSecret = () => {
+    const secret = generateTgSecret();
+    addLog('warn', 'Секрет прокси заменён — прежняя ссылка больше не работает.', 'TgProxy');
+    setTgSettings({ secret });
+  };
+
+  const openTgLink = () => {
+    if (!tgLink || !window.chrome?.webview) return;
+    window.chrome.webview.postMessage('tg_open:' + tgLink);
+  };
+
   const applyToggles = (next: QuickToggleState, message: string) => {
     saveSetting('zapret2_toggles_v5', JSON.stringify(next));
     addLog('info', message, 'Settings');
@@ -995,6 +1116,29 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const t = setTimeout(() => window.chrome!.webview!.postMessage('run_preflight'), 800);
       return () => clearTimeout(t);
     }
+  }, []);
+
+  /**
+   * Прокси Telegram при старте программы.
+   *
+   * Состояние спрашивается всегда: мост мог остаться поднятым с прошлого
+   * раза, и интерфейс обязан показывать то, что есть на самом деле, а не
+   * то, что запомнил. Автозапуск — отдельным шагом и только если его
+   * включили: открывать слушающий порт без спроса неправильно.
+   */
+  useEffect(() => {
+    if (!window.chrome?.webview) return;
+    const t = setTimeout(() => {
+      window.chrome!.webview!.postMessage('tg_status');
+      if (tgSettings.autoStart) {
+        addLog('info', 'Автозапуск прокси Telegram...', 'TgProxy');
+        sendTgStart(tgSettings);
+      }
+    }, 1200);
+    return () => clearTimeout(t);
+    // Намеренно только при монтировании: это стартовое действие, а не
+    // реакция на правку настроек — их применяет setTgSettings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /**
@@ -1534,6 +1678,14 @@ const parseReleaseHighlights = (body: string): string[] => {
         isDiagnosticsRunning,
         updateInfo,
         checkForUpdates,
+        tgProxy,
+        tgSettings,
+        setTgSettings,
+        startTgProxy,
+        stopTgProxy,
+        regenerateTgSecret,
+        tgLink,
+        openTgLink,
         autoCheckUpdates,
         setAutoCheckUpdates,
         dismissUpdate,
