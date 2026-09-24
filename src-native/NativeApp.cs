@@ -248,6 +248,11 @@ namespace Zapret2App
 
         public MainForm()
         {
+            // TLS 1.2 для WebClient во всём процессе. Раньше протокол выставлялся
+            // только перед загрузкой обновления, и остальные запросы к GitHub
+            // (список узлов для прокси Telegram) шли по TLS 1.0 и тихо падали.
+            try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; } catch { }
+
             this.FormBorderStyle = FormBorderStyle.None;
             this.DoubleBuffered = true;
             this.SetStyle(ControlStyles.ResizeRedraw, true);
@@ -2584,7 +2589,7 @@ namespace Zapret2App
 
                     using (var ssl = new SslStream(tcp.GetStream(), false, (a, b, c, d) => true))
                     {
-                        var tls = ssl.AuthenticateAsClientAsync(sni);
+                        var tls = ssl.AuthenticateAsClientAsync(sni, null, ProbeTls, false);
                         if (await Task.WhenAny(tls, Task.Delay(5000)) != tls)
                         {
                             sw.Stop();
@@ -2879,6 +2884,26 @@ namespace Zapret2App
                 e.PhysIfIdx, JsonEscape(e.PhysName)));
         }
 
+        /// <summary>
+        /// Версия TLS для всех проверочных соединений.
+        /// </summary>
+        /// <remarks>
+        /// Без явного указания .NET Framework в exe, собранном csc без атрибута
+        /// TargetFramework, работает в режиме совместимости с 4.0 и шлёт
+        /// ClientHello TLS 1.0: 115 байт, семь старых шифров, без
+        /// signature_algorithms. Discord (Cloudflare) и GitHub такое отвергают
+        /// за ~120 мс ошибкой «Указанная функция не поддерживается».
+        ///
+        /// Из-за этого автоподбор никогда не мог найти стратегию для Discord:
+        /// рабочий multidisorder проводил запрос мимо DPI, сервер отказывал
+        /// по версии TLS, и вариант считался провалом. Вкладка «Диагностика»
+        /// врала так же. Разобрано 2026-09-24, MEMORY §8.
+        ///
+        /// В PowerShell значения по умолчанию другие — там уходит TLS 1.2, и
+        /// проверка «а не в версии ли дело» из PowerShell дала ложное «нет».
+        /// </remarks>
+        private const SslProtocols ProbeTls = SslProtocols.Tls12;
+
         private class TuneProbe
         {
             public string Host;
@@ -3090,7 +3115,7 @@ namespace Zapret2App
 
                     using (var ssl = new SslStream(tcp.GetStream(), false, (a, b, c, d) => true))
                     {
-                        var tls = ssl.AuthenticateAsClientAsync(pr.Host);
+                        var tls = ssl.AuthenticateAsClientAsync(pr.Host, null, ProbeTls, false);
                         if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls)
                         {
                             tr.Result = "TLS завис, ответа нет за " + sw.ElapsedMilliseconds + " мс";

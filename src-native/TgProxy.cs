@@ -923,6 +923,9 @@ namespace Zapret2App
         {
             try
             {
+                // Без этого WebClient в нашем exe идёт по TLS 1.0, и GitHub
+                // отвечает отказом — список ни разу не обновился до 0.3.3.
+                try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; } catch { }
                 using (var wc = new WebClient())
                 {
                     wc.Headers.Add("User-Agent", "Zapret2-GUI");
