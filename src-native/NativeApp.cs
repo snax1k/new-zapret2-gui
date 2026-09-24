@@ -41,7 +41,7 @@ namespace Zapret2App
         public const int HTCAPTION = 0x2;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.3.2";
+        public const string AppVersion = "0.3.3";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -2229,6 +2229,7 @@ namespace Zapret2App
             if (string.IsNullOrEmpty(line)) return;
 
             CountActivity(line);
+            if (autotuneRunning && !tuneTraces.IsEmpty) TraceCoreLine(line);
 
             string lower = line.ToLowerInvariant();
             // Эвристика намеренно узкая: с --debug ядро печатает тысячи строк
@@ -2884,6 +2885,138 @@ namespace Zapret2App
             public string Ip;
         }
 
+        /// <summary>Что случилось с одной пробой — и что о ней сказало ядро.</summary>
+        private class ProbeTrace
+        {
+            public string Host;
+            public string Ip;
+            public int Port;
+            public bool Ok;
+            public string Result = "";
+            /// <summary>Строк ядра об этом соединении — видело ли оно пробу вообще.</summary>
+            public int Packets;
+            /// <summary>Сколько раз ядро применило к нему десинхронизацию.</summary>
+            public int Desync;
+            /// <summary>Какое имя ядро прочитало в ClientHello.</summary>
+            public string Hostname;
+            /// <summary>Входящие сбросы и их TTL — подпись вмешательства DPI.</summary>
+            public int Rst;
+            public string RstTtl = "";
+
+            public string Describe()
+            {
+                string core;
+                if (Port == 0) core = "до ядра не дошло";
+                else if (Packets == 0 && Desync == 0) core = "ядро это соединение НЕ ВИДЕЛО";
+                else
+                {
+                    core = "ядро: строк " + Packets + ", обработано " + Desync + " раз";
+                    if (!string.IsNullOrEmpty(Hostname)) core += ", имя «" + Hostname + "»";
+                    if (Desync == 0) core += " — БЕЗ ОБРАБОТКИ";
+                }
+                if (Rst > 0) core += "; сбросов RST: " + Rst + " (ttl " + RstTtl.TrimEnd(',', ' ') + ")";
+                return string.Format("{0} @ {1} :{2}  {3} | {4}", Host, Ip, Port, Result, core);
+            }
+        }
+
+        /// <summary>Пробы, которые сейчас в полёте: локальный порт -> трассировка.</summary>
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, ProbeTrace> tuneTraces =
+            new System.Collections.Concurrent.ConcurrentDictionary<int, ProbeTrace>();
+        /// <summary>Последнее имя из ClientHello, напечатанное ядром: оно идёт строкой перед «dpi desync».</summary>
+        private volatile string lastCoreHostname;
+        private static readonly Regex CorePortRx = new Regex(@"(?:src=\d+\.\d+\.\d+\.\d+:|sport=|dport=)(\d+)", RegexOptions.Compiled);
+        private static readonly Regex CoreTtlRx = new Regex(@"ttl=(\d+)", RegexOptions.Compiled);
+        private static readonly Regex CoreFlagsRx = new Regex(@"flags=([A-Z]+)", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Отчёт автоподбора, отдельный от общего журнала.
+        /// </summary>
+        /// <remarks>
+        /// Общий журнал с --debug набирает 10 МБ минут за десять и уходит в
+        /// ротацию. Ложные нули подбора 22.09 так и потерялись: когда дошли
+        /// руки разбираться, журналов того часа уже не было. Отчёт подбора
+        /// маленький и хранится отдельно, последние пять штук.
+        /// </remarks>
+        private StringBuilder tuneReport;
+        private readonly object tuneReportLock = new object();
+
+        private void TuneReport(string line)
+        {
+            lock (tuneReportLock)
+            {
+                if (tuneReport != null) tuneReport.Append(line).Append("\r\n");
+            }
+        }
+
+        /// <summary>Разбирает строку ядра: относится ли она к одной из проб.</summary>
+        private void TraceCoreLine(string line)
+        {
+            if (line.StartsWith("hostname: ", StringComparison.Ordinal))
+            {
+                lastCoreHostname = line.Substring(10).Trim();
+                return;
+            }
+            foreach (Match m in CorePortRx.Matches(line))
+            {
+                int port;
+                if (!int.TryParse(m.Groups[1].Value, out port)) continue;
+                ProbeTrace t;
+                if (!tuneTraces.TryGetValue(port, out t)) continue;
+                lock (t)
+                {
+                    if (line.StartsWith("dpi desync", StringComparison.Ordinal))
+                    {
+                        t.Desync++;
+                        if (lastCoreHostname != null) t.Hostname = lastCoreHostname;
+                    }
+                    else
+                    {
+                        t.Packets++;
+                        // Входящий сброс: «IP4: сервер => мы ... dport=<наш порт> flags=AR».
+                        // Буквы флагов идут в произвольном порядке, поэтому ищем R
+                        // внутри значения, а не сразу после «flags=».
+                        var fl = CoreFlagsRx.Match(line);
+                        if (fl.Success && fl.Groups[1].Value.IndexOf('R') >= 0 &&
+                            line.IndexOf("dport=" + port, StringComparison.Ordinal) >= 0)
+                        {
+                            t.Rst++;
+                            var ttl = CoreTtlRx.Match(line);
+                            if (ttl.Success) t.RstTtl += ttl.Groups[1].Value + ", ";
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
+        private void SaveTuneReport()
+        {
+            string text;
+            lock (tuneReportLock)
+            {
+                if (tuneReport == null) return;
+                text = tuneReport.ToString();
+                tuneReport = null;
+            }
+            try
+            {
+                string dir = logDir ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zapret2-GUI", "logs");
+                Directory.CreateDirectory(dir);
+                string path = Path.Combine(dir, "autotune-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".txt");
+                File.WriteAllText(path, text, new UTF8Encoding(true));
+
+                var files = new DirectoryInfo(dir).GetFiles("autotune-*.txt");
+                Array.Sort(files, (x, y) => y.LastWriteTimeUtc.CompareTo(x.LastWriteTimeUtc));
+                for (int i = 5; i < files.Length; i++) { try { files[i].Delete(); } catch { } }
+
+                SendLog("info", "Подробный отчёт подбора: " + path, "Autotune");
+            }
+            catch (Exception ex)
+            {
+                SendLog("warn", "Отчёт подбора не записался: " + ex.Message, "Autotune");
+            }
+        }
+
         /// <summary>Тихая проверка TLS: ничего не шлёт в интерфейс, только результат.</summary>
         /// <summary>
         /// Совпадает ли имя из сертификата с запрошенным хостом.
@@ -2928,38 +3061,70 @@ namespace Zapret2App
         /// Одна проба: TCP, рукопожатие TLS с настоящим именем и сверка
         /// сертификата. Возвращает true только если дошли до нужного сервера.
         /// </summary>
-        private async Task<bool> TryTlsProbe(string ip, string sni, int connectMs, int tlsMs)
+        /// <summary>
+        /// Проба TLS с разбором, что именно произошло.
+        /// </summary>
+        /// <remarks>
+        /// Локальный порт регистрируется в <see cref="tuneTraces"/> сразу после
+        /// установки TCP — до того, как уйдёт ClientHello. Тогда строки ядра
+        /// об этом соединении попадут в отчёт, и будет видно главное: видело ли
+        /// ядро пробу вообще, обработало ли её и прислал ли DPI сброс.
+        /// </remarks>
+        private async Task<ProbeTrace> TryTlsProbe(TuneProbe pr, int connectMs, int tlsMs)
         {
+            var tr = new ProbeTrace { Host = pr.Host, Ip = pr.Ip };
+            var sw = Stopwatch.StartNew();
             try
             {
                 using (var tcp = CreateProbeClient())
                 {
-                    var connect = tcp.ConnectAsync(ip, 443);
-                    if (await Task.WhenAny(connect, Task.Delay(connectMs)) != connect) return false;
+                    var connect = tcp.ConnectAsync(pr.Ip, 443);
+                    if (await Task.WhenAny(connect, Task.Delay(connectMs)) != connect)
+                    {
+                        tr.Result = "TCP таймаут " + sw.ElapsedMilliseconds + " мс";
+                        return tr;
+                    }
                     await connect;
+                    try { tr.Port = ((IPEndPoint)tcp.Client.LocalEndPoint).Port; } catch { }
+                    if (tr.Port > 0) tuneTraces[tr.Port] = tr;
 
                     using (var ssl = new SslStream(tcp.GetStream(), false, (a, b, c, d) => true))
                     {
-                        var tls = ssl.AuthenticateAsClientAsync(sni);
-                        if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls) return false;
+                        var tls = ssl.AuthenticateAsClientAsync(pr.Host);
+                        if (await Task.WhenAny(tls, Task.Delay(tlsMs)) != tls)
+                        {
+                            tr.Result = "TLS завис, ответа нет за " + sw.ElapsedMilliseconds + " мс";
+                            return tr;
+                        }
                         await tls;
 
                         string subject = null;
                         try { if (ssl.RemoteCertificate != null) subject = ssl.RemoteCertificate.Subject; }
                         catch { }
 
-                        if (!CertNameMatches(subject, sni))
+                        if (!CertNameMatches(subject, pr.Host))
                         {
                             SendLog("warn",
-                                "Рукопожатие с " + sni + " прошло, но сертификат выписан на «" +
+                                "Рукопожатие с " + pr.Host + " прошло, но сертификат выписан на «" +
                                 (subject ?? "неизвестно") + "» — это не тот сервер.", "Autotune");
-                            return false;
+                            tr.Result = "чужой сертификат: " + (subject ?? "неизвестно");
+                            return tr;
                         }
-                        return true;
+                        tr.Ok = true;
+                        tr.Result = "OK за " + sw.ElapsedMilliseconds + " мс";
+                        return tr;
                     }
                 }
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                var e = ex;
+                while (e.InnerException != null) e = e.InnerException;
+                string m = e.Message.Replace("\r", " ").Replace("\n", " ");
+                if (m.Length > 90) m = m.Substring(0, 90);
+                tr.Result = "ошибка через " + sw.ElapsedMilliseconds + " мс: " + e.GetType().Name + ": " + m;
+                return tr;
+            }
         }
 
         /// <summary>
@@ -2980,7 +3145,12 @@ namespace Zapret2App
             for (int i = 0; i < attempts; i++)
             {
                 if (autotuneCancel) break;
-                if (await TryTlsProbe(pr.Ip, pr.Host, 4000, 6000)) ok++;
+                var tr = await TryTlsProbe(pr, 4000, 6000);
+                // Строки ядра приходят чуть позже самих событий — даём им дойти.
+                await Task.Delay(150);
+                if (tr.Port > 0) { ProbeTrace gone; tuneTraces.TryRemove(tr.Port, out gone); }
+                TuneReport("    " + tr.Describe());
+                if (tr.Ok) ok++;
                 else if (++failed >= 2) break;
 
                 // Соединения подряд без паузы выглядят для DPI иначе, чем
@@ -3091,6 +3261,17 @@ namespace Zapret2App
 
             autotuneRunning = true;
             autotuneCancel = false;
+            tuneTraces.Clear();
+            lock (tuneReportLock)
+            {
+                tuneReport = new StringBuilder();
+                tuneReport.Append("Автоподбор, ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
+                    .Append(", версия ").Append(AppVersion).Append("\r\n");
+                tuneReport.Append("Цели: ").Append(head[1]).Append("\r\n");
+                tuneReport.Append("Строки ядра о пробах видны только с --debug: без него счётчики ядра будут нулевыми.\r\n");
+            }
+            IPAddress probeBind = FindPhysicalLocalAddress();
+            TuneReport("Пробы привязаны к: " + (probeBind != null ? probeBind.ToString() : "НЕ ПРИВЯЗАНЫ"));
 
             Task.Run(async () =>
             {
@@ -3198,6 +3379,10 @@ namespace Zapret2App
                             "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"testing\"}}",
                             i, rawVariants.Length, JsonEscape(id)));
 
+                        TuneReport("");
+                        TuneReport(string.Format("=== [{0}] {1}", id, label));
+                        TuneReport(id == "off" ? "    ядро остановлено" : "    winws " + args);
+
                         // Каждая цель проверяется трижды. Счёт успехов, а не
                         // галочка: «3 из 3» и «2 из 3» — принципиально разные
                         // вещи, второе означает, что вариант отваливается.
@@ -3217,6 +3402,10 @@ namespace Zapret2App
 
                         bool allOk = passed == total;
                         string detail = weak.Count > 0 ? string.Join("; ", weak.ToArray()) : "";
+                        bool coreAlive;
+                        lock (procLock) { coreAlive = winws != null && !winws.HasExited; }
+                        TuneReport(string.Format("    итог: {0} из {1}{2}", passed, total,
+                            id == "off" ? "" : coreAlive ? ", ядро живо" : ", ЯДРО УМЕРЛО во время проверки"));
 
                         SendLog(allOk ? "success" : passed > 0 ? "warn" : "error",
                             string.Format("[{0}] успешных проб {1} из {2} за {3} мс{4}",
@@ -3252,6 +3441,8 @@ namespace Zapret2App
                     // не оставлял систему со случайным вариантом.
                     StopZapretProcess(false);
                     autotuneRunning = false;
+                    tuneTraces.Clear();
+                    SaveTuneReport();
 
                     if (!string.IsNullOrEmpty(restoreArgs))
                     {

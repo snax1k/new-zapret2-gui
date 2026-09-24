@@ -45,7 +45,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.3.2';
+export const APP_VERSION = '0.3.3';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -1183,11 +1183,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ? 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com'
       : 'discord.com,gateway.discord.gg,updates.discord.com';
 
+    // Режим «Весь трафик» снимает списки доменов, и первым на 443 выигрывает
+    // профиль YouTube: всё HTTPS, включая Discord, уходит под его стратегию.
+    // Тогда перебор стратегий для сайтов не меняет ровным счётом ничего — все
+    // варианты мерят одно и то же. Подбор проверяет профиль в том виде, в
+    // каком его задумывали, а человека предупреждаем.
+    if (quickToggles.allTrafficMode && group === 'sites') {
+      addLog(
+        'warn',
+        'Включён режим «Весь трафик»: пока он включён, весь HTTPS идёт по стратегии YouTube, и выбранная здесь стратегия для сайтов на порт 443 не влияет. Подбор проверяет профиль сайтов без этого режима.',
+        'Autotune'
+      );
+    }
+
     const body = variants
       .map(s => {
+        // Подробный лог ядра обязателен: по нему отчёт подбора видит, дошла
+        // ли проба до ядра и обработало ли оно её. Без него счётчики пусты.
+        const base = { ...quickToggles, verboseLog: true, allTrafficMode: false };
         const toggles = group === 'youtube'
-          ? { ...quickToggles, youtubeStrategy: s.id }
-          : { ...quickToggles, sitesStrategy: s.id };
+          ? { ...base, youtubeStrategy: s.id }
+          : { ...base, sitesStrategy: s.id };
         return [s.id, s.label, buildPresetArgs(activePreset, toggles, netRoute?.physIfIdx || 0)].join('|');
       })
       .join('\x1e');
