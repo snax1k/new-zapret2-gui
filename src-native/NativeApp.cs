@@ -40,6 +40,31 @@ namespace Zapret2App
         public const int WM_NCLBUTTONDOWN = 0xA1;
         public const int HTCAPTION = 0x2;
 
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
+
+        // ---- Один экземпляр ------------------------------------------------
+        //
+        // Вторая копия программы убивала обход первой. При старте Main снимает
+        // все winws.exe (KillZombieWinDivert — чтобы не оставались процессы от
+        // упавших сеансов), а защиты от повторного запуска не было. Типичный
+        // путь новичка: нажал крестик — программа ушла в трей и продолжила
+        // работать; запустил exe снова — вторая копия молча сняла ядро первой,
+        // и мост Telegram во второй не поднимался: порт 1443 занят первой.
+        // Так было в журнале тестера из Петербурга 24.09: два запуска за 11 с
+        // без закрытия между ними.
+        //
+        // Теперь вторая копия находит первую по именованному мьютексу, просит
+        // её показать окно и выходит, ничего не тронув. Все копии работают с
+        // правами администратора (requireAdministrator в манифесте), поэтому
+        // объекты в пространстве Local\ доступны друг другу без оговорок.
+        private const string InstanceMutexName = @"Local\Zapret2-GUI-Instance";
+        private const string InstanceShowEventName = @"Local\Zapret2-GUI-Show";
+        /// <summary>Держится всё время жизни процесса — пока он жив, копия одна.</summary>
+        private static Mutex instanceMutex;
+        /// <summary>Сигнал от второй копии: «покажи окно».</summary>
+        private static EventWaitHandle instanceShowEvent;
+
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
         public const string AppVersion = "0.4.0";
 
@@ -122,6 +147,10 @@ namespace Zapret2App
         [STAThread]
         public static void Main(string[] args)
         {
+            // Самым первым делом: вторая копия не должна успеть ни распаковать
+            // файлы поверх работающих, ни снять чужое ядро.
+            if (!AcquireSingleInstance()) return;
+
             // Dynamic resolution of embedded managed DLLs
             AppDomain.CurrentDomain.AssemblyResolve += (sender, eventArgs) =>
             {
@@ -152,6 +181,9 @@ namespace Zapret2App
                     Verb = "runas"
                 };
 
+                // Повышенный процесс — это новая копия; мьютекс надо отдать ему,
+                // иначе он решит, что программа уже запущена, и выйдет.
+                ReleaseSingleInstance();
                 try
                 {
                     Process.Start(processInfo);
@@ -273,6 +305,7 @@ namespace Zapret2App
             InitLogging();
             ExtractResources();
             SetupTray();
+            this.Shown += (s, e) => StartInstanceListener();
             InitializeWebView();
 
             // Счётчики уходят в интерфейс раз в секунду и только при изменении,
@@ -3792,16 +3825,104 @@ namespace Zapret2App
             }
         }
 
+        /// <summary>
+        /// Занять место единственного экземпляра. false — программа уже
+        /// запущена: её окно попрошено показаться, этой копии надо выйти.
+        /// </summary>
+        private static bool AcquireSingleInstance()
+        {
+            try
+            {
+                bool createdNew;
+                instanceMutex = new Mutex(true, InstanceMutexName, out createdNew);
+                if (createdNew)
+                {
+                    instanceShowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, InstanceShowEventName);
+                    return true;
+                }
+
+                instanceMutex.Dispose();
+                instanceMutex = null;
+                try
+                {
+                    // Эту копию запустил человек только что — у неё есть право
+                    // вывести окно на передний план. Передаём его первой копии,
+                    // иначе Windows покажет её окно мигающей кнопкой на панели
+                    // задач, а не поверх остальных.
+                    AllowSetForegroundWindow(-1);
+                    using (var ev = EventWaitHandle.OpenExisting(InstanceShowEventName))
+                    {
+                        ev.Set();
+                    }
+                }
+                catch { }
+                return false;
+            }
+            catch
+            {
+                // Не смогли даже проверить — запускаемся как обычно: лучше
+                // вторая копия, чем программа, которая не открывается вовсе.
+                return true;
+            }
+        }
+
+        private static void ReleaseSingleInstance()
+        {
+            try { if (instanceShowEvent != null) instanceShowEvent.Dispose(); } catch { }
+            instanceShowEvent = null;
+            try
+            {
+                if (instanceMutex != null)
+                {
+                    instanceMutex.ReleaseMutex();
+                    instanceMutex.Dispose();
+                }
+            }
+            catch { }
+            instanceMutex = null;
+        }
+
+        /// <summary>Ждёт сигнала от повторного запуска и показывает окно.</summary>
+        private void StartInstanceListener()
+        {
+            if (instanceShowEvent == null) return;
+            var t = new Thread(delegate()
+            {
+                while (!isExiting)
+                {
+                    try
+                    {
+                        if (!instanceShowEvent.WaitOne(1000)) continue;
+                        if (isExiting || !this.IsHandleCreated) break;
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            WriteLogFile("info", "Setup", "Повторный запуск — показываю уже открытое окно.");
+                            RestoreWindow();
+                        }));
+                    }
+                    catch { break; }
+                }
+            });
+            t.IsBackground = true;
+            t.Name = "single-instance";
+            t.Start();
+        }
+
+        /// <summary>Показать окно: из трея, из свёрнутого состояния, поверх остальных.</summary>
+        private void RestoreWindow()
+        {
+            this.Show();
+            if (this.WindowState == FormWindowState.Minimized) this.WindowState = FormWindowState.Normal;
+            this.BringToFront();
+            this.Activate();
+        }
+
         private void SetupTray()
         {
             try
             {
                 trayMenu = new ContextMenu();
-                trayMenu.MenuItems.Add("Открыть Zapret2", (s, e) => {
-                    this.Show();
-                    this.WindowState = FormWindowState.Normal;
-                    this.BringToFront();
-                });
+                trayMenu.MenuItems.Add("Открыть Zapret2", (s, e) => RestoreWindow());
                 trayMenu.MenuItems.Add("Открыть папку логов", (s, e) => {
                     OpenLogsFolder();
                 });
@@ -3848,11 +3969,7 @@ namespace Zapret2App
                 trayIcon.ContextMenu = trayMenu;
                 trayIcon.Visible = true;
 
-                trayIcon.DoubleClick += (s, e) => {
-                    this.Show();
-                    this.WindowState = FormWindowState.Normal;
-                    this.BringToFront();
-                };
+                trayIcon.DoubleClick += (s, e) => RestoreWindow();
             }
             catch { }
         }

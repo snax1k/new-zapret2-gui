@@ -1,1 +1,1 @@
-46fda8c25839fbea1982d46f931ef4707b5edd0096429e9654c23037fb302590  Zapret2-GUI-v0.4.0-portable.exe
+23967cada8bce1c182e18af6f1f68a2e4d62528917333b5078befcccf345ad55  Zapret2-GUI-v0.4.0-portable.exe
