@@ -1,4 +1,4 @@
-import { Preset, PresetArgs, QuickToggleState, YoutubeStrategyId } from '../types';
+import { Preset, PresetArgs, QuickToggleState, StrategyGroup, YoutubeStrategyId } from '../types';
 
 /**
  * Сборка командной строки winws.exe (bol-van/zapret v72.x).
@@ -144,6 +144,16 @@ function isDiscordProfile(tokens: string[]): boolean {
   return !!domains && /discord/.test(domains);
 }
 
+/**
+ * Профиль медиасерверов Discord: discord.media на альтернативных TCP-портах
+ * Cloudflare (2053, 2083, 2087, 2096, 8443).
+ */
+function isDiscordMediaProfile(tokens: string[]): boolean {
+  if (optValue(tokens, OPT_FILTER_TCP) === null) return false;
+  const domains = optValue(tokens, '--hostlist-domains=');
+  return !!domains && /discord\.media/.test(domains);
+}
+
 /** Профиль YouTube/Google: TCP-профиль, отбирающий домены по list-google.txt. */
 function isGoogleTcpProfile(tokens: string[]): boolean {
   if (optValue(tokens, OPT_FILTER_TCP) === null) return false;
@@ -164,26 +174,36 @@ export interface YoutubeStrategy {
 }
 
 const FAKE_TLS_BIN = 'tls_clienthello_www_google_com.bin';
+/** Приветствия российских сайтов из поставки ядра — для белого списка ТСПУ. */
+const RU_TLS_BIN = 'tls_clienthello_gosuslugi_ru.bin';
+const RU_TLS_KYBER_BIN = 'tls_clienthello_vk_com_kyber.bin';
 
 /**
- * Варианты обхода для YouTube/Google.
+ * Варианты обхода — общая библиотека для профиля YouTube и профиля сайтов.
  *
  * Какой из них сработает — зависит от конкретного ТСПУ провайдера, определить
  * это заранее нельзя. Все варианты собраны из техник, документированных в
  * docs/readme.md ядра zapret v72.13, и используют только те режимы, маркеры
  * позиций и виды fooling, которые ядро действительно принимает
  * (desync.c:203-209, nfqws.c:1273-1285, protocol.c:74-80).
+ *
+ * ПОРЯДОК ВАЖЕН. Подбор делает быстрый отсев и берёт на полную проверку
+ * первых прошедших, поэтому впереди стоят те, что чаще всего побеждают на
+ * живых замерах (multidisorder — 9 из 9 у тестеров в Москве и Петербурге),
+ * а в хвосте — экзотика.
+ *
+ * Не вошли намеренно: fooling=ts (на Windows метки времени TCP по умолчанию
+ * выключены, readme.md:379) и hopbyhop (только IPv6).
  */
 export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
   {
-    id: 'seqovl568',
-    label: 'seqovl 568',
-    hint: 'Перекрытие обрезанной записью ClientHello. Так профиль сайтов работал до 0.1.5.',
+    id: 'multidisorder',
+    label: 'multidisorder без фейков',
+    hint: 'Только перестановка сегментов по четырём позициям, ничего не шлётся лишнего.',
     options: [
-      '--dpi-desync=multisplit',
-      '--dpi-desync-split-pos=1',
-      '--dpi-desync-split-seqovl=568',
-      '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
+      '--ip-id=zero',
+      '--dpi-desync=multidisorder',
+      '--dpi-desync-split-pos=1,midsld,host+1,sniext+1',
     ],
   },
   {
@@ -199,16 +219,24 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
     ],
   },
   {
-    id: 'seqovl-midsld',
-    label: 'disorder + seqovl на midsld',
-    hint: 'Разрез в середине домена 2 уровня с перекрытием — рвёт само поле SNI.',
+    id: 'seqovl568',
+    label: 'seqovl 568',
+    hint: 'Перекрытие обрезанной записью ClientHello. Так профиль сайтов работал до 0.1.5.',
     options: [
-      '--ip-id=zero',
-      // Маркер в seqovl допустим только для disorder (readme.md:556-558):
-      // в режиме split ядро принимает лишь абсолютное число.
-      '--dpi-desync=multidisorder',
-      '--dpi-desync-split-pos=midsld',
-      '--dpi-desync-split-seqovl=midsld-1',
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=1',
+      '--dpi-desync-split-seqovl=568',
+      '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'seqovl652-pos2',
+    label: 'seqovl 652, разрез на 2',
+    hint: 'Перекрытие 652 байта с разрезом после второго байта — распространённый вариант из сборок сообщества.',
+    options: [
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=2',
+      '--dpi-desync-split-seqovl=652',
       '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
     ],
   },
@@ -226,6 +254,19 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
     ],
   },
   {
+    id: 'fake-badseq-md5sig',
+    label: 'fake + multidisorder (badseq + md5sig)',
+    hint: 'Два способа испортить фейк сразу — пример из документации ядра (readme.md:2090).',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multidisorder',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=badseq,md5sig',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
     id: 'fake-badseq',
     label: 'fake + multisplit (badseq)',
     hint: 'Фейк с неверным sequence: сервер его игнорирует, DPI — нет.',
@@ -235,6 +276,19 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
       '--dpi-desync-split-pos=1,midsld',
       '--dpi-desync-repeats=6',
       '--dpi-desync-fooling=badseq',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fake-split-md5sig',
+    label: 'fake + multisplit (md5sig)',
+    hint: 'Фейк с опцией TCP MD5, а сам запрос режется в прямом порядке.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multisplit',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=md5sig',
       '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
     ],
   },
@@ -252,13 +306,298 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
     ],
   },
   {
-    id: 'multidisorder',
-    label: 'multidisorder без фейков',
-    hint: 'Только перестановка сегментов по четырём позициям, ничего не шлётся лишнего.',
+    id: 'multisplit-sni',
+    label: 'multisplit по SNI',
+    hint: 'Разрез в прямом порядке по четырём позициям вокруг имени сайта, без фейков.',
     options: [
       '--ip-id=zero',
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=1,sniext+1,host+1,midsld',
+    ],
+  },
+  {
+    id: 'seqovl-midsld',
+    label: 'disorder + seqovl на midsld',
+    hint: 'Разрез в середине домена 2 уровня с перекрытием — рвёт само поле SNI.',
+    options: [
+      '--ip-id=zero',
+      // Маркер в seqovl допустим только для disorder (readme.md:556-558):
+      // в режиме split ядро принимает лишь абсолютное число.
       '--dpi-desync=multidisorder',
-      '--dpi-desync-split-pos=1,midsld,host+1,sniext+1',
+      '--dpi-desync-split-pos=midsld',
+      '--dpi-desync-split-seqovl=midsld-1',
+      '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fakedsplit-badseq',
+    label: 'fakedsplit (badseq)',
+    hint: 'Части запроса перемешаны с фейками в прямом порядке; фейки с неверным sequence.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fakedsplit',
+      '--dpi-desync-split-pos=midsld',
+      '--dpi-desync-repeats=4',
+      '--dpi-desync-fooling=badseq',
+    ],
+  },
+  {
+    id: 'fakeddisorder-md5sig',
+    label: 'fakeddisorder (md5sig)',
+    hint: 'Части запроса перемешаны с фейками в обратном порядке; фейки с опцией TCP MD5.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fakeddisorder',
+      '--dpi-desync-split-pos=midsld',
+      '--dpi-desync-repeats=4',
+      '--dpi-desync-fooling=md5sig',
+    ],
+  },
+  {
+    id: 'hostfakesplit',
+    label: 'hostfakesplit (подмена имени)',
+    hint: 'Имя сайта вырезается в отдельный сегмент, рядом летит его копия с именем google.com.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=hostfakesplit',
+      '--dpi-desync-hostfakesplit-mod=host=www.google.com',
+      '--dpi-desync-repeats=4',
+      '--dpi-desync-fooling=md5sig',
+    ],
+  },
+  {
+    id: 'fake-rndsni',
+    label: 'fake со случайным SNI',
+    hint: 'Каждый фейк получает случайное имя сайта и номер сессии — DPI не может запомнить шаблон.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multidisorder',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=md5sig',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+      '--dpi-desync-fake-tls-mod=rnd,rndsni,dupsid',
+    ],
+  },
+  {
+    id: 'fake-datanoack',
+    label: 'fake + multidisorder (datanoack)',
+    hint: 'Фейк без флага ACK: сервер его не примет, а часть DPI не смотрит на флаги.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multidisorder',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=datanoack',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fake-autottl-disorder',
+    label: 'fake + TTL + multidisorder',
+    hint: 'Укороченный TTL у фейка, а сам запрос — в обратном порядке.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multidisorder',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-autottl=2:3-12',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fake-badsum',
+    label: 'fake + multisplit (badsum)',
+    hint: 'Фейк с испорченной контрольной суммой. Часто глушится роутером — поэтому в хвосте списка.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multisplit',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=badsum',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fake-ttl4',
+    label: 'fake + TTL 4',
+    hint: 'Фиксированный TTL фейка вместо подбора: помогает, когда автоподбор TTL ошибается.',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multisplit',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-ttl=4',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'multisplit-pos2',
+    label: 'простой разрез на 2',
+    hint: 'Самый простой вариант: запрос режется после второго байта, больше ничего.',
+    options: [
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=2',
+    ],
+  },
+  // ---- 0.4.2: по образцу Flowseal (zapret-discord-youtube, MIT) ----------
+  //
+  // Главное, что у них есть и чего не было у нас: фейки с именами
+  // РОССИЙСКИХ сайтов для профиля, через который идёт Discord. ТСПУ
+  // замораживает соединения к иностранным дата-центрам после 16–20 КБ
+  // ответа и делает исключения по белому списку имён (net4people/bbs#490).
+  // Фейк с vk.com / gosuslugi.ru / ya.ru перед настоящим приветствием
+  // заставляет DPI записать соединение в белый список. Файлы приветствий
+  // берутся из поставки ядра; ya.ru, mail.ru, ozon.ru подставляются самим
+  // ядром (fake-tls-mod=sni, hostfakesplit-mod=host).
+  //
+  // Второе — fooling=ts: ядро портит в фейке метку времени TCP, сервер его
+  // отбрасывает, DPI — нет. Работает только при включённых метках времени
+  // в Windows; предполётная проверка показывает их состояние.
+  {
+    id: 'seqovl568-ru',
+    label: 'seqovl 568, начало от gosuslugi.ru',
+    hint: 'Как «seqovl 568», но ложное начало — от российского сайта. Основной вариант Flowseal для сайтов.',
+    options: [
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=1',
+      '--dpi-desync-split-seqovl=568',
+      '--dpi-desync-split-seqovl-pattern=' + RU_TLS_BIN,
+    ],
+  },
+  {
+    id: 'ts-fake-ru',
+    label: 'fake vk.com (ts)',
+    hint: 'Перед запросом — поддельное приветствие vk.com с испорченной меткой времени: DPI видит российский сайт, сервер фейк отбрасывает.',
+    options: [
+      '--dpi-desync=fake',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=ts',
+      '--dpi-desync-fake-tls=' + RU_TLS_KYBER_BIN,
+    ],
+  },
+  {
+    id: 'ts-seqovl664-ru',
+    label: 'fake + seqovl 664, vk.com (ts)',
+    hint: 'Фейк vk.com и перекрытие начала запроса тем же приветствием (Flowseal ALT11).',
+    options: [
+      '--dpi-desync=fake,multisplit',
+      '--dpi-desync-split-seqovl=664',
+      '--dpi-desync-split-pos=1',
+      '--dpi-desync-fooling=ts',
+      '--dpi-desync-repeats=8',
+      '--dpi-desync-split-seqovl-pattern=' + RU_TLS_KYBER_BIN,
+      '--dpi-desync-fake-tls=' + RU_TLS_KYBER_BIN,
+    ],
+  },
+  {
+    id: 'ts-hostfakesplit-ru',
+    label: 'hostfakesplit mail.ru (ts)',
+    hint: 'Имя сайта отправляется отдельно, рядом — копия с именем mail.ru, плюс фейк gosuslugi.ru (Flowseal ALT13).',
+    options: [
+      '--dpi-desync=fake,hostfakesplit',
+      '--dpi-desync-fooling=ts',
+      '--dpi-desync-hostfakesplit-mod=host=mail.ru,altorder=1',
+      '--dpi-desync-repeats=5',
+      '--dpi-desync-fake-tls=' + RU_TLS_BIN,
+    ],
+  },
+  {
+    id: 'ts-hostfakesplit-ozon',
+    label: 'hostfakesplit ozon.ru (ts + md5sig)',
+    hint: 'Имя сайта отправляется отдельно, рядом — копия с именем ozon.ru (Flowseal ALT9).',
+    options: [
+      '--dpi-desync=hostfakesplit',
+      '--dpi-desync-repeats=4',
+      '--dpi-desync-fooling=ts,md5sig',
+      '--dpi-desync-hostfakesplit-mod=host=ozon.ru',
+    ],
+  },
+  {
+    id: 'ts-sni-yaru',
+    label: 'fake + hostfakesplit ya.ru (ts)',
+    hint: 'Фейк со случайным содержимым и именем ya.ru, имя сайта — отдельным сегментом (Flowseal ALT3).',
+    options: [
+      '--dpi-desync=fake,hostfakesplit',
+      '--dpi-desync-fake-tls-mod=rnd,dupsid,sni=ya.ru',
+      '--dpi-desync-hostfakesplit-mod=host=ya.ru,altorder=1',
+      '--dpi-desync-fooling=ts',
+    ],
+  },
+  {
+    id: 'ts-fakedsplit-ru',
+    label: 'fake + fakedsplit vk.com (ts)',
+    hint: 'Запрос перемешан с пустыми фейками, перед ним — приветствие vk.com (Flowseal ALT).',
+    options: [
+      '--dpi-desync=fake,fakedsplit',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=ts',
+      '--dpi-desync-fakedsplit-pattern=0x00',
+      '--dpi-desync-fake-tls=' + RU_TLS_KYBER_BIN,
+    ],
+  },
+  {
+    id: 'ts-fake-google',
+    label: 'fake google.com (ts)',
+    hint: 'Простой фейк с испорченной меткой времени (Flowseal SIMPLE FAKE).',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=ts',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'badseq1000',
+    label: 'fake + multisplit (badseq +1000)',
+    hint: 'Фейк с номером, сдвинутым на 1000 — сервер его не примет (Flowseal ALT4).',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multisplit',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=badseq',
+      '--dpi-desync-badseq-increment=1000',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'badseq2-fake',
+    label: 'fake (badseq +2)',
+    hint: 'Один фейк с номером, сдвинутым на 2, без разрезания запроса (Flowseal SIMPLE FAKE ALT).',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake',
+      '--dpi-desync-repeats=6',
+      '--dpi-desync-fooling=badseq',
+      '--dpi-desync-badseq-increment=2',
+      '--dpi-desync-fake-tls=' + FAKE_TLS_BIN,
+    ],
+  },
+  {
+    id: 'fake-tls-auto',
+    label: 'fake TLS auto + multidisorder',
+    hint: 'Стандартный фейк ядра со случайным содержимым и именем google.com, 11 повторов (Flowseal FAKE TLS AUTO).',
+    options: [
+      '--ip-id=zero',
+      '--dpi-desync=fake,multidisorder',
+      '--dpi-desync-split-pos=1,midsld',
+      '--dpi-desync-repeats=11',
+      '--dpi-desync-fooling=badseq',
+      '--dpi-desync-fake-tls=0x00000000',
+      '--dpi-desync-fake-tls=!',
+      '--dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com',
+    ],
+  },
+  {
+    id: 'seqovl679-sniext',
+    label: 'seqovl 679, разрезы 2 и SNI',
+    hint: 'Перекрытие 679 байт и разрез у начала расширения SNI (Flowseal ALT7).',
+    options: [
+      '--dpi-desync=multisplit',
+      '--dpi-desync-split-pos=2,sniext+1',
+      '--dpi-desync-split-seqovl=679',
+      '--dpi-desync-split-seqovl-pattern=' + FAKE_TLS_BIN,
     ],
   },
   {
@@ -268,6 +607,43 @@ export const YOUTUBE_STRATEGIES: YoutubeStrategy[] = [
     options: [],
   },
 ];
+
+/**
+ * Порядок перебора по группам.
+ *
+ * Подбор берёт на полную проверку первых прошедших отсев, поэтому впереди —
+ * то, что чаще побеждает. Для Discord это multidisorder (9 из 9 у тестеров
+ * в Москве и Петербурге, у автора — четыре победителя 2026-10-08:
+ * multidisorder, fakedsplit, hostfakesplit, datanoack) и варианты Flowseal с
+ * российскими именами. Для YouTube российские имена не нужны: Google в
+ * белых списках ТСПУ не значится, а SNI-блокировка снимается и без них.
+ */
+export const STRATEGY_ORDER: Record<StrategyGroup, YoutubeStrategyId[]> = {
+  sites: [
+    'multidisorder', 'seqovl568-ru', 'ts-fake-ru', 'ts-seqovl664-ru',
+    'hostfakesplit', 'ts-hostfakesplit-ru', 'ts-sni-yaru', 'fakedsplit-badseq',
+    'fake-datanoack', 'ts-hostfakesplit-ozon', 'ts-fakedsplit-ru', 'fake-tls-auto',
+    'badseq1000', 'badseq2-fake', 'seqovl681', 'seqovl568', 'seqovl652-pos2',
+    'seqovl679-sniext', 'fake-md5sig', 'fake-badseq-md5sig', 'fake-autottl-disorder',
+    'multisplit-sni', 'fake-rndsni', 'fake-split-md5sig', 'fake-badseq', 'fake-autottl',
+    'fakeddisorder-md5sig', 'seqovl-midsld', 'fake-badsum', 'fake-ttl4', 'multisplit-pos2',
+    'off'
+  ],
+  youtube: [
+    'multidisorder', 'seqovl681', 'ts-fake-google', 'seqovl652-pos2', 'seqovl679-sniext',
+    'hostfakesplit', 'fake-tls-auto', 'badseq1000', 'badseq2-fake', 'fake-md5sig',
+    'fake-badseq-md5sig', 'fake-badseq', 'fake-split-md5sig', 'fakedsplit-badseq',
+    'fake-autottl', 'fake-autottl-disorder', 'multisplit-sni', 'seqovl-midsld',
+    'fakeddisorder-md5sig', 'fake-rndsni', 'fake-datanoack', 'fake-badsum', 'fake-ttl4',
+    'seqovl568', 'multisplit-pos2',
+    'off'
+  ]
+};
+
+/** Стратегии группы в порядке перебора. */
+export function strategiesFor(group: StrategyGroup): YoutubeStrategy[] {
+  return STRATEGY_ORDER[group].map(id => findYoutubeStrategy(id));
+}
 
 export const DEFAULT_YOUTUBE_STRATEGY: YoutubeStrategyId = 'seqovl681';
 
@@ -371,7 +747,7 @@ export function buildPresetArgs(
     // Стратегия «off» убирает профиль Google целиком: трафик YouTube пойдёт
     // без вмешательства, и станет видно, мешает обход или блокирует провайдер.
     if (ytStrategy === 'off' && isGoogleTcpProfile(p)) return false;
-    if (sitesStrategy === 'off' && isGeneralSitesProfile(p)) return false;
+    if (sitesStrategy === 'off' && (isGeneralSitesProfile(p) || isDiscordMediaProfile(p))) return false;
     return true;
   });
   // Никогда не отдаём ядру пустую конфигурацию.
@@ -382,6 +758,10 @@ export function buildPresetArgs(
     let tokens = p;
     if (isGoogleTcpProfile(p)) tokens = applyStrategy(p, ytStrategy);
     else if (isGeneralSitesProfile(p)) tokens = applyStrategy(p, sitesStrategy);
+    // Медиасерверы Discord — та же группа, что discord.com: тот же Cloudflare,
+    // тот же DPI. До 0.4.2 профиль был зашит на seqovl 681 и не подбирался —
+    // у Flowseal он меняется в каждом варианте вместе с остальными.
+    else if (isDiscordMediaProfile(p)) tokens = applyStrategy(p, sitesStrategy);
 
     if (toggles.allTrafficMode) {
       tokens = tokens.filter(t => !HOSTLIST_PREFIXES.some(pref => t.startsWith(pref)));

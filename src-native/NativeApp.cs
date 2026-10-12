@@ -66,7 +66,7 @@ namespace Zapret2App
         private static EventWaitHandle instanceShowEvent;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.4.0";
+        public const string AppVersion = "0.4.2-test";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -89,7 +89,7 @@ namespace Zapret2App
         /// <summary>Порог ротации: при превышении лог упаковывается в zip.</summary>
         private const long LOG_MAX_BYTES = 10L * 1024 * 1024;
         /// <summary>Сколько zip-архивов держать в папке логов.</summary>
-        private const int LOG_KEEP_ARCHIVES = 5;
+        private const int LOG_KEEP_ARCHIVES = 10;
 
         private string logDir;
         private string logFilePath;
@@ -144,9 +144,29 @@ namespace Zapret2App
         /// <summary>Текст последней ошибки запуска — показывается в интерфейсе.</summary>
         private string tgLastError = "";
 
+        /// <summary>
+        /// Порт удалённой отладки WebView2 — только для тестовых сборок и только
+        /// по ключу --devtools-port=N. Нужен, чтобы проверить подбор на живой
+        /// программе из скрипта, не кликая мышью. В выпусках ключ игнорируется:
+        /// открытый порт отладки дал бы любой программе на машине управлять
+        /// окном, запущенным от администратора.
+        /// </summary>
+        private static int DevToolsPort = 0;
+
         [STAThread]
         public static void Main(string[] args)
         {
+            if (AppVersion.Contains("-test"))
+            {
+                foreach (var a in args)
+                {
+                    int port;
+                    if (a.StartsWith("--devtools-port=", StringComparison.Ordinal) &&
+                        int.TryParse(a.Substring("--devtools-port=".Length), out port) && port > 1024 && port < 65536)
+                        DevToolsPort = port;
+                }
+            }
+
             // Самым первым делом: вторая копия не должна успеть ни распаковать
             // файлы поверх работающих, ни снять чужое ядро.
             if (!AcquireSingleInstance()) return;
@@ -177,6 +197,8 @@ namespace Zapret2App
                 var processInfo = new ProcessStartInfo
                 {
                     FileName = Application.ExecutablePath,
+                    // Ключи запуска переживают повышение прав.
+                    Arguments = string.Join(" ", Array.ConvertAll(args, a => "\"" + a.Replace("\"", "") + "\"")),
                     UseShellExecute = true,
                     Verb = "runas"
                 };
@@ -653,7 +675,16 @@ namespace Zapret2App
                 this.Controls.Add(webView);
 
                 string userDataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Zapret2-GUI", "WebViewData");
-                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                CoreWebView2Environment env;
+                if (DevToolsPort > 0)
+                {
+                    env = await CoreWebView2Environment.CreateAsync(null, userDataFolder,
+                        new CoreWebView2EnvironmentOptions("--remote-debugging-port=" + DevToolsPort));
+                }
+                else
+                {
+                    env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                }
                 await webView.EnsureCoreWebView2Async(env);
 
                 // Настройки должны оказаться на странице РАНЬШЕ её скриптов,
@@ -669,7 +700,7 @@ namespace Zapret2App
                 );
 
                 webView.CoreWebView2.Settings.IsStatusBarEnabled = false;
-                webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                webView.CoreWebView2.Settings.AreDevToolsEnabled = DevToolsPort > 0;
 
                 webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
                 webView.CoreWebView2.Navigate("https://app.zapret/index.html");
@@ -1451,6 +1482,135 @@ namespace Zapret2App
             public string Level;
             public string Title;
             public string Detail;
+            /// <summary>Команда кнопки в интерфейсе (сообщение нативной части) и её подпись.</summary>
+            public string Action;
+            public string ActionLabel;
+        }
+
+        /// <summary>
+        /// Включены ли в Windows метки времени TCP (RFC 1323). null — не удалось понять.
+        /// </summary>
+        /// <remarks>
+        /// От них зависит fooling=ts: ядро портит в фейке поле TSval, и сервер
+        /// его отбрасывает. Если система меток не ставит, портить нечего —
+        /// фейк доходит до сервера и ломает соединение. Flowseal включает
+        /// метки при каждом запуске; мы спрашиваем.
+        /// </remarks>
+        private static bool? TcpTimestampsEnabled()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("netsh", "interface tcp show global")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    StandardOutputEncoding = Encoding.GetEncoding(System.Globalization.CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
+                };
+                using (var p = Process.Start(psi))
+                {
+                    string text = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(5000);
+                    foreach (var raw in text.Split('\n'))
+                    {
+                        if (raw.IndexOf("1323", StringComparison.Ordinal) < 0) continue;
+                        int colon = raw.LastIndexOf(':');
+                        if (colon < 0) continue;
+                        string v = raw.Substring(colon + 1).Trim().ToLowerInvariant();
+                        if (v.StartsWith("enabled") || v.StartsWith("включ") || v.StartsWith("разреш")) return true;
+                        if (v.StartsWith("disabled") || v.StartsWith("отключ") || v.StartsWith("выключ") || v.StartsWith("запрещ")) return false;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private void EnableTcpTimestamps()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("netsh", "interface tcp set global timestamps=enabled")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(5000);
+                }
+                bool? now = TcpTimestampsEnabled();
+                SendLog(now == true ? "success" : "error",
+                    now == true ? "Метки времени TCP включены." : "Не удалось включить метки времени TCP.", "Preflight");
+            }
+            catch (Exception ex)
+            {
+                SendLog("error", "Не удалось включить метки времени TCP: " + ex.Message, "Preflight");
+            }
+            SendPreflight();
+        }
+
+        /// <summary>
+        /// Соединения Discord, которые ведут на системный прокси. Пустой список —
+        /// Discord не запущен или ходит напрямую.
+        /// </summary>
+        /// <remarks>
+        /// Случай 2026-10-12: Happ (xray) держал системный прокси 127.0.0.1:10809,
+        /// и все TCP-соединения Discord.exe шли в него. Обход их не видел —
+        /// фильтр WinDivert исключает loopback, — а человек менял стратегии и
+        /// не понимал, почему Discord то открывается, то нет.
+        /// </remarks>
+        private static int CountDiscordProxyConnections(string proxyAddr)
+        {
+            string hostPort = proxyAddr;
+            // Формат «http=127.0.0.1:10809;https=...» — берём первый адрес.
+            int semi = hostPort.IndexOf(';');
+            if (semi > 0) hostPort = hostPort.Substring(0, semi);
+            int eq = hostPort.IndexOf('=');
+            if (eq >= 0) hostPort = hostPort.Substring(eq + 1);
+            hostPort = hostPort.Replace("http://", "").Trim().TrimEnd('/');
+            if (hostPort.StartsWith("localhost:", StringComparison.OrdinalIgnoreCase))
+                hostPort = "127.0.0.1:" + hostPort.Substring("localhost:".Length);
+            if (hostPort.Length == 0) return 0;
+
+            var pids = new System.Collections.Generic.HashSet<string>();
+            foreach (var name in new[] { "Discord", "DiscordPTB", "DiscordCanary", "DiscordDevelopment" })
+            {
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    pids.Add(p.Id.ToString());
+                    p.Dispose();
+                }
+            }
+            if (pids.Count == 0) return 0;
+
+            int found = 0;
+            try
+            {
+                var psi = new ProcessStartInfo("netstat", "-ano -p TCP")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true
+                };
+                using (var p = Process.Start(psi))
+                {
+                    string text = p.StandardOutput.ReadToEnd();
+                    p.WaitForExit(5000);
+                    foreach (var raw in text.Split('\n'))
+                    {
+                        var cols = raw.Split(new[] { ' ', '\t', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                        // TCP  локальный  удалённый  состояние  PID
+                        if (cols.Length < 5 || cols[0] != "TCP") continue;
+                        if (cols[2] == hostPort && pids.Contains(cols[4])) found++;
+                    }
+                }
+            }
+            catch { }
+            return found;
         }
 
         /// <summary>Читает системный прокси Windows. null, если он выключен.</summary>
@@ -1486,9 +1646,23 @@ namespace Zapret2App
                     Level = "warn",
                     Title = "Включён системный прокси: " + proxy,
                     Detail = "HTTP(S) приложений уходит на прокси через loopback, " +
-                             "обход такой трафик не видит. UDP (голос Discord, QUIC) " +
-                             "идёт мимо прокси и обрабатывается."
+                             "обход такой трафик не видит. Discord и браузеры берут этот прокси " +
+                             "сами. UDP (голос Discord, QUIC) идёт мимо прокси и обрабатывается."
                 });
+
+                int viaProxy = CountDiscordProxyConnections(proxy);
+                if (viaProxy > 0)
+                {
+                    list.Add(new PreflightItem
+                    {
+                        Id = "discord_proxy",
+                        Level = "error",
+                        Title = "Discord ходит через прокси, а не через обход",
+                        Detail = "Соединений Discord с прокси " + proxy + ": " + viaProxy + ". Загрузка, сообщения и " +
+                                 "картинки идут через него, и никакая стратегия на них не влияет. Выключите VPN-клиент " +
+                                 "(или добавьте Discord в его исключения) и перезапустите Discord полностью — через значок в трее."
+                    });
+                }
             }
             else
             {
@@ -1541,6 +1715,33 @@ namespace Zapret2App
                 }
             }
             catch { }
+
+            // 2б. Метки времени TCP — без них не работают варианты с fooling=ts.
+            bool? ts = TcpTimestampsEnabled();
+            if (ts == false)
+            {
+                list.Add(new PreflightItem
+                {
+                    Id = "tcpts",
+                    Level = "warn",
+                    Title = "Метки времени TCP выключены",
+                    Detail = "Часть способов обхода (с пометкой ts) без них не работает: подбор их отбросит. " +
+                             "Кнопка выполнит «netsh interface tcp set global timestamps=enabled» — это настройка " +
+                             "Windows, перезагрузка не нужна.",
+                    Action = "enable_tcp_timestamps",
+                    ActionLabel = "Включить"
+                });
+            }
+            else if (ts == true)
+            {
+                list.Add(new PreflightItem
+                {
+                    Id = "tcpts",
+                    Level = "ok",
+                    Title = "Метки времени TCP включены",
+                    Detail = "Способы обхода с пометкой ts будут работать."
+                });
+            }
 
             // 3. Чужие экземпляры winws. Два процесса на одном драйвере дерутся
             //    за пакеты, и результат становится непредсказуемым.
@@ -1601,6 +1802,13 @@ namespace Zapret2App
 
         private void SendPreflight()
         {
+            // Проверка запускает netsh и netstat — полсекунды, которые не
+            // должны подвешивать окно.
+            Task.Run(() => SendPreflightNow());
+        }
+
+        private void SendPreflightNow()
+        {
             // Интерфейс нужен интерфейсу приложения до запуска ядра: он
             // подставляет --wf-iface в командную строку, и показанная команда
             // должна совпадать с той, что выполнится.
@@ -1614,9 +1822,10 @@ namespace Zapret2App
                 for (int i = 0; i < items.Count; i++)
                 {
                     if (i > 0) sb.Append(',');
-                    sb.AppendFormat("{{\"id\":\"{0}\",\"level\":\"{1}\",\"title\":\"{2}\",\"detail\":\"{3}\"}}",
+                    sb.AppendFormat("{{\"id\":\"{0}\",\"level\":\"{1}\",\"title\":\"{2}\",\"detail\":\"{3}\",\"action\":\"{4}\",\"actionLabel\":\"{5}\"}}",
                         items[i].Id, items[i].Level,
-                        JsonEscape(items[i].Title), JsonEscape(items[i].Detail));
+                        JsonEscape(items[i].Title), JsonEscape(items[i].Detail),
+                        JsonEscape(items[i].Action), JsonEscape(items[i].ActionLabel));
                 }
                 sb.Append("]}");
                 SendToWeb(sb.ToString());
@@ -2262,12 +2471,44 @@ namespace Zapret2App
                 "{{\"type\":\"activity\",\"desync\":{0},\"hosts\":{1}}}", d, h));
         }
 
+        /// <summary>
+        /// Строки --debug, которые описывают каждый пакет и ничего не говорят
+        /// о решениях ядра.
+        /// </summary>
+        /// <remarks>
+        /// Во время звонка Discord голос идёт ~50 пакетами в секунду, и на
+        /// каждый ядро печатает пять строк: заголовок пакета, адреса, «cached
+        /// profile», «unknown protocol», «reinject». Журнал рос на 10 МБ за
+        /// 10 минут, пять архивов вмещали меньше часа, и запуск Discord, ради
+        /// разбора которого журнал и открывают, оказывался уже затёрт
+        /// (замер 2026-10-12: 55 тыс. строк про один голосовой сервер за час).
+        /// Строки про TCP, ClientHello, имена хостов и десинхронизацию
+        /// остаются — по ним и идёт разбор.
+        /// </remarks>
+        private static bool IsPacketNoise(string line)
+        {
+            if (line.IndexOf("using cached desync profile", StringComparison.Ordinal) >= 0) return true;
+            if (line.IndexOf("reinject unmodified", StringComparison.Ordinal) >= 0) return true;
+            if (line.IndexOf("not applying tampering to unknown protocol", StringComparison.Ordinal) >= 0) return true;
+            if (line.StartsWith("packet: id=", StringComparison.Ordinal) && line.IndexOf(" len=", StringComparison.Ordinal) > 0) return true;
+            if ((line.StartsWith("IP4: ", StringComparison.Ordinal) || line.StartsWith("IP6: ", StringComparison.Ordinal)) &&
+                line.IndexOf("proto=udp", StringComparison.Ordinal) > 0) return true;
+            if (line.StartsWith("incoming hops guessed", StringComparison.Ordinal) ||
+                line.StartsWith("incoming TTL", StringComparison.Ordinal) ||
+                line.StartsWith("using cached hops", StringComparison.Ordinal)) return true;
+            return false;
+        }
+
         private void HandleWinwsOutput(string line, bool isError)
         {
             if (string.IsNullOrEmpty(line)) return;
 
             CountActivity(line);
             if (autotuneRunning && !tuneTraces.IsEmpty) TraceCoreLine(line);
+
+            // Пакетный шум в файл не пишем. Счётчики и трассировка подбора
+            // выше уже получили строку — они работают по полному потоку.
+            if (!isError && IsPacketNoise(line)) return;
 
             string lower = line.ToLowerInvariant();
             // Эвристика намеренно узкая: с --debug ядро печатает тысячи строк
@@ -2942,6 +3183,17 @@ namespace Zapret2App
         {
             public string Host;
             public string Ip;
+            /// <summary>
+            /// Порт цели. Обычно 443; медиасерверы Discord проверяются на 2053 —
+            /// это отдельный профиль ядра (альтернативные порты Cloudflare).
+            /// </summary>
+            public int Port = 443;
+            /// <summary>Все IPv4-адреса цели из DNS и номер текущего в этом списке.</summary>
+            public System.Collections.Generic.List<string> Candidates;
+            public int IpIndex;
+            /// <summary>Проверялась ли цель в текущем круге перебора и открылась ли хоть раз.</summary>
+            public bool Tested;
+            public bool EverPassed;
         }
 
         /// <summary>Что случилось с одной пробой — и что о ней сказало ядро.</summary>
@@ -3100,7 +3352,7 @@ namespace Zapret2App
             {
                 using (var tcp = CreateProbeClient())
                 {
-                    var connect = tcp.ConnectAsync(pr.Ip, 443);
+                    var connect = tcp.ConnectAsync(pr.Ip, pr.Port);
                     if (await Task.WhenAny(connect, Task.Delay(connectMs)) != connect)
                     {
                         tr.Result = "TCP таймаут " + sw.ElapsedMilliseconds + " мс";
@@ -3237,27 +3489,557 @@ namespace Zapret2App
         /// Вызывается с остановленным ядром, до перебора вариантов: адрес
         /// должен быть один и тот же для всех, иначе результаты несравнимы.
         /// </remarks>
-        private string PickReachable(System.Collections.Generic.List<string> ips, string host)
+        private int PickReachable(System.Collections.Generic.List<string> ips, int from, string host, int port)
         {
-            foreach (string ip in ips)
+            for (int i = from; i < ips.Count; i++)
             {
-                if (autotuneCancel) return null;
+                if (autotuneCancel) return -1;
+                string ip = ips[i];
                 try
                 {
                     using (var tcp = CreateProbeClient())
                     {
-                        var connect = tcp.ConnectAsync(ip, 443);
-                        if (connect.Wait(2500) && tcp.Connected) return ip;
+                        var connect = tcp.ConnectAsync(ip, port);
+                        if (connect.Wait(2500) && tcp.Connected) return i;
                     }
                 }
                 catch { }
                 SendLog("info", host + ": адрес " + ip + " не отвечает, пробую следующий.", "Autotune");
             }
-            return null;
+            return -1;
+        }
+
+        /// <summary>
+        /// Сколько раз автоподбор может сменить адрес цели, на которой не
+        /// прошёл ни один вариант. Каждый круг — полный перебор, около
+        /// полутора минут, поэтому больше одного запасного не берём.
+        /// </summary>
+        private const int AutotuneAddressRetries = 1;
+
+        /// <summary>
+        /// Цели, которые проверялись и не открылись ни при одном варианте,
+        /// переводит на следующий отвечающий адрес. Возвращает true, если
+        /// хоть одна цель сменила адрес — тогда перебор имеет смысл повторить.
+        /// </summary>
+        private bool SwitchStuckProbes(System.Collections.Generic.List<TuneProbe> probes)
+        {
+            // PickReachable должен видеть сеть без обхода, как и при выборе
+            // первого адреса.
+            StopZapretProcess(false);
+
+            bool switched = false;
+            foreach (var pr in probes)
+            {
+                if (!pr.Tested || pr.EverPassed) continue;
+                if (pr.Candidates == null || pr.IpIndex + 1 >= pr.Candidates.Count)
+                {
+                    TuneReport("    " + pr.Host + ": других адресов нет, остаёмся на " + pr.Ip);
+                    continue;
+                }
+
+                int at = PickReachable(pr.Candidates, pr.IpIndex + 1, pr.Host, pr.Port);
+                if (at < 0) continue;
+
+                string old = pr.Ip;
+                pr.Ip = pr.Candidates[at];
+                pr.IpIndex = at;
+                switched = true;
+
+                SendLog("warn", string.Format(
+                    "{0}: на адресе {1} не прошёл ни один вариант — возможно, режется сам адрес. Повторяю перебор на {2}.",
+                    pr.Host, old, pr.Ip), "Autotune");
+                TuneReport("");
+                TuneReport(string.Format("### {0}: адрес {1} не открылся ни при одном варианте, перебор повторяется на {2}",
+                    pr.Host, old, pr.Ip));
+            }
+            return switched;
         }
 
         /// <summary>Сколько раз проверяется каждая цель.</summary>
         private const int AutotuneAttempts = 3;
+
+        /// <summary>
+        /// Сколько вариантов, прошедших быстрый отсев, проверяется полностью
+        /// за один заход. Библиотека упорядочена от частых победителей к
+        /// редким, так что первые прошедшие — самые вероятные.
+        /// </summary>
+        private const int AutotuneFinalists = 4;
+
+        private class TuneVariant
+        {
+            /// <summary>Номер строки в переданном списке — по нему интерфейс узнаёт вариант.</summary>
+            public int Index;
+            public string Id;
+            public string Label;
+            public string Args;
+        }
+
+        private class VariantResult
+        {
+            public bool Up;
+            public int Passed;
+            public int Total;
+            public long Ms;
+            public string Detail = "";
+            /// <summary>Прошла ли страница в настоящем браузере (true, если проверки не было).</summary>
+            public bool BrowserOk = true;
+            public bool AllOk { get { return Up && Total > 0 && Passed == Total && BrowserOk; } }
+        }
+
+        // ---- Проверка в настоящем браузере -------------------------------
+
+        private class BrowserCheck
+        {
+            public string Url;
+            /// <summary>Строка, которая обязана быть в загруженной странице.</summary>
+            public string Marker;
+        }
+
+        private class BrowserResult
+        {
+            /// <summary>Проверка состоялась. false — браузера нет или он не запустился.</summary>
+            public bool Ran;
+            public bool Ok;
+            public long Ms;
+            public string Detail = "";
+        }
+
+        /// <summary>Страницы, которые подбор открывает в браузере у финалистов.</summary>
+        private System.Collections.Generic.List<BrowserCheck> tuneBrowserChecks =
+            new System.Collections.Generic.List<BrowserCheck>();
+        private bool browserMissingReported;
+
+        /// <summary>
+        /// Сколько браузер ждёт загрузки страницы. Discord в норме открывается
+        /// за 2 с (замер 2026-10-12, страница входа ~76 тыс. символов) —
+        /// запас шестикратный.
+        /// </summary>
+        private const int BrowserCheckTimeoutMs = 12000;
+
+        /// <summary>Путь к Microsoft Edge или null.</summary>
+        private static string FindEdge()
+        {
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"))
+                {
+                    string v = key != null ? key.GetValue(null) as string : null;
+                    if (!string.IsNullOrEmpty(v) && File.Exists(v)) return v;
+                }
+            }
+            catch { }
+            foreach (var root in new[] {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) })
+            {
+                if (string.IsNullOrEmpty(root)) continue;
+                string path = Path.Combine(root, @"Microsoft\Edge\Application\msedge.exe");
+                if (File.Exists(path)) return path;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Открывает страницы в Edge без окна и ждёт полной загрузки.
+        /// </summary>
+        /// <remarks>
+        /// Зачем, если есть проба. Проба отвечает на один вопрос — пропустил
+        /// ли DPI приветствие, — и смотрит только на ServerHello. Этого мало:
+        ///
+        /// 1. Подбор 0.4.1 выдал для Discord четыре варианта «9 из 9», а
+        ///    вручную поставленный непроверенный вариант давал пустую
+        ///    страницу — и человек видел «Discord грузится через раз».
+        /// 2. ТСПУ умеет пропускать рукопожатие и замораживать соединение
+        ///    после 16–20 КБ ответа (net4people/bbs#490). Проба этого не видит
+        ///    в принципе, а клиент Discord на такой заморозке висит на
+        ///    заставке.
+        /// 3. curl и SslStream шлют маленькое приветствие schannel (TLS 1.2),
+        ///    а Discord — большое приветствие Chromium с TLS 1.3; ядро и DPI
+        ///    обходятся с ними по-разному (замер 2026-10-12: curl не открыл
+        ///    YouTube, Edge открыл его за 3,4 с на той же стратегии).
+        ///
+        /// Edge — тот же Chromium, что внутри Discord: то же приветствие, тот же
+        /// TLS 1.3, загрузка всех подресурсов. Страница считается открытой,
+        /// если браузер дождался события load раньше таймаута и в ней есть
+        /// ожидаемая строка. Каждый запуск — с чистым профилем, иначе браузер
+        /// переиспользовал бы соединения, открытые при прошлом варианте.
+        ///
+        /// --no-proxy-server: системный прокси (VPN-клиенты вроде Happ) увёл
+        /// бы проверку в туннель. --disable-quic: проверяется TCP-профиль
+        /// ядра, а не QUIC. Привязать браузер к физической карте, как пробу,
+        /// нельзя — при поднятом полнотуннельном VPN проверка соврёт, об этом
+        /// предупреждает предполётная проверка.
+        /// </remarks>
+        private async Task<BrowserResult> RunBrowserChecks(System.Collections.Generic.List<BrowserCheck> checks, TuneVariant v, int count)
+        {
+            var res = new BrowserResult();
+            if (checks == null || checks.Count == 0) return res;
+
+            string edge = FindEdge();
+            if (edge == null)
+            {
+                if (!browserMissingReported)
+                {
+                    browserMissingReported = true;
+                    SendLog("warn", "Microsoft Edge не найден — проверка в браузере пропущена, подбор верит только пробе.", "Autotune");
+                }
+                return res;
+            }
+
+            if (v != null) SendTunePhase(v, count, "browser");
+
+            var sw = Stopwatch.StartNew();
+            res.Ok = true;
+            foreach (var c in checks)
+            {
+                if (autotuneCancel) { res.Ok = false; res.Ran = true; res.Detail = "прервано"; break; }
+                var one = await Task.Run(() => LoadInEdge(edge, c));
+                TuneReport("    браузер: " + c.Url + " — " + one.Detail);
+                if (!one.Ran)
+                {
+                    // Браузер не поднялся вовсе — это не провал варианта.
+                    if (!browserMissingReported)
+                    {
+                        browserMissingReported = true;
+                        SendLog("warn", "Edge не запустился (" + one.Detail + ") — проверка в браузере пропущена.", "Autotune");
+                    }
+                    return new BrowserResult();
+                }
+                res.Ran = true;
+                if (!one.Ok)
+                {
+                    res.Ok = false;
+                    res.Detail = "браузер: " + one.Detail;
+                    break;
+                }
+            }
+            res.Ms = sw.ElapsedMilliseconds;
+            if (res.Ran && res.Ok) res.Detail = "браузер: открылось за " + res.Ms + " мс";
+            return res;
+        }
+
+        private BrowserResult LoadInEdge(string edge, BrowserCheck c)
+        {
+            var r = new BrowserResult();
+            string profile = Path.Combine(Path.GetTempPath(), "zapret2-probe-" + Guid.NewGuid().ToString("N"));
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = edge,
+                    Arguments = "--headless=new --no-proxy-server --disable-quic --no-first-run --no-default-browser-check " +
+                                "--disable-extensions --disable-gpu --disable-sync --disable-background-networking " +
+                                "--disable-component-update --mute-audio " +
+                                "--user-data-dir=\"" + profile + "\" --timeout=" + BrowserCheckTimeoutMs +
+                                " --dump-dom \"" + c.Url + "\"",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
+                };
+                using (var p = Process.Start(psi))
+                {
+                    var outTask = p.StandardOutput.ReadToEndAsync();
+                    var errTask = p.StandardError.ReadToEndAsync();
+                    if (!p.WaitForExit(BrowserCheckTimeoutMs + 8000))
+                    {
+                        KillProcessTree(p.Id);
+                        r.Ran = true;
+                        r.Detail = "браузер завис и был снят";
+                        return r;
+                    }
+                    string dom = outTask.Wait(3000) ? outTask.Result : "";
+                    long ms = sw.ElapsedMilliseconds;
+                    r.Ms = ms;
+
+                    // Пустой вывод за секунду — браузер не стартовал, а не сайт
+                    // не открылся: заблокированная страница держит его до таймаута.
+                    if (dom.Length == 0 && ms < 1500)
+                    {
+                        string err = errTask.Wait(1000) ? errTask.Result.Trim() : "";
+                        if (err.Length > 120) err = err.Substring(0, 120);
+                        r.Detail = "код " + p.ExitCode + (err.Length > 0 ? ", " + err : "");
+                        return r;
+                    }
+
+                    r.Ran = true;
+                    bool marker = dom.IndexOf(c.Marker, StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool timedOut = ms >= BrowserCheckTimeoutMs - 300;
+                    int secs = BrowserCheckTimeoutMs / 1000;
+                    if (marker && dom.Length >= 2000 && !timedOut)
+                    {
+                        r.Ok = true;
+                        r.Detail = "загрузилось за " + ms + " мс, " + dom.Length + " символов";
+                    }
+                    else if (timedOut && dom.Length >= 2000)
+                    {
+                        r.Detail = "страница начала грузиться, но не догрузилась за " + secs + " с (" + dom.Length +
+                                   " символов) — похоже на заморозку соединения";
+                    }
+                    else if (timedOut)
+                    {
+                        r.Detail = "страница не открылась за " + secs + " с";
+                    }
+                    else
+                    {
+                        r.Detail = "открылась не та страница (" + dom.Length + " символов, нет «" + c.Marker + "»)";
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                r.Detail = "не запустился: " + ex.Message;
+            }
+            finally
+            {
+                // Дочерние процессы браузера отпускают профиль не сразу.
+                Task.Run(async () =>
+                {
+                    for (int i = 0; i < 10; i++)
+                    {
+                        await Task.Delay(1000);
+                        try { if (Directory.Exists(profile)) Directory.Delete(profile, true); return; } catch { }
+                    }
+                });
+            }
+            return r;
+        }
+
+        private static void KillProcessTree(int pid)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("taskkill", "/PID " + pid + " /T /F")
+                {
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+                using (var k = Process.Start(psi)) { if (k != null) k.WaitForExit(5000); }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Дополняет полную проверку варианта загрузкой страниц в браузере.
+        /// </summary>
+        private async Task CheckInBrowser(TuneVariant v, VariantResult r, int count)
+        {
+            if (!r.AllOk || tuneBrowserChecks.Count == 0 || autotuneCancel) return;
+            var b = await RunBrowserChecks(tuneBrowserChecks, v, count);
+            if (!b.Ran) return;
+            r.BrowserOk = b.Ok;
+            r.Detail = r.Detail.Length > 0 ? r.Detail + "; " + b.Detail : b.Detail;
+            SendLog(b.Ok ? "success" : "warn", string.Format("[{0}] {1}", v.Label, b.Detail), "Autotune");
+        }
+
+        private enum RoundOutcome
+        {
+            /// <summary>Есть вариант, прошедший полную проверку.</summary>
+            Winner,
+            /// <summary>Цели открываются без обхода — перебирать нечего.</summary>
+            NotNeeded,
+            Cancelled,
+            /// <summary>Проверены все варианты, победителя нет.</summary>
+            Exhausted
+        }
+
+        /// <summary>
+        /// Поднимает ядро с вариантом и проверяет цели, по attempts попыток на
+        /// каждую. Результат в интерфейс не отправляет — это решает вызывающий:
+        /// прошедший отсев вариант ещё не итог.
+        /// </summary>
+        private async Task<VariantResult> TestVariant(TuneVariant v, System.Collections.Generic.List<TuneProbe> probes,
+            int count, int attempts, string stage)
+        {
+            var res = new VariantResult();
+            bool isOff = v.Id == "off";
+
+            SendTunePhase(v, count, "starting");
+            StopZapretProcess(false);
+
+            // Эталон гоняется с полностью остановленным ядром, а не
+            // с отключённым профилем: вопрос «а блокируют ли вообще»
+            // должен проверяться так, как будто программы нет.
+            res.Up = isOff ? true : StartCoreForTune(v.Args);
+            res.Total = probes.Count * attempts;
+            if (!res.Up)
+            {
+                SendLog("error", string.Format("[{0}] ядро не запустилось — вариант пропущен.", v.Label), "Autotune");
+                res.Detail = "ядро не запустилось";
+                return res;
+            }
+
+            // Драйвер уже загружен (StartZapretProcess ждал 1,5 с),
+            // но conntrack ядра пуст — даём ему полсекунды.
+            await Task.Delay(600);
+
+            SendTunePhase(v, count, "testing");
+
+            TuneReport("");
+            TuneReport(string.Format("=== [{0}] {1} ({2})", v.Id, v.Label, stage));
+            TuneReport(isOff ? "    ядро остановлено" : "    winws " + v.Args);
+
+            var weak = new System.Collections.Generic.List<string>();
+            var sw = Stopwatch.StartNew();
+
+            for (int t = 0; t < probes.Count; t++)
+            {
+                if (autotuneCancel) break;
+                var pr = probes[t];
+                int ok = await ProbeTarget(pr, attempts);
+                res.Passed += ok;
+                // Эталон не в счёт: без обхода цель и должна молчать.
+                if (!isOff)
+                {
+                    pr.Tested = true;
+                    if (ok > 0) pr.EverPassed = true;
+                }
+                if (ok < attempts) weak.Add(pr.Host + ": " + ok + " из " + attempts);
+
+                // Цель не открылась ни разу — вариант не годится, и
+                // остальные цели проверять незачем. Все они нужны
+                // одновременно: клиент Discord без discord.com
+                // застревает на заставке, как бы ни работал шлюз.
+                // Эталон тоже обрывается: одной закрытой цели достаточно,
+                // чтобы понять, что блокировка есть.
+                if (ok == 0 && t + 1 < probes.Count)
+                {
+                    for (int r = t + 1; r < probes.Count; r++)
+                    {
+                        weak.Add(probes[r].Host + ": не проверялась");
+                    }
+                    TuneReport("    остальные цели не проверялись: " + pr.Host + " не открылся ни разу");
+                    break;
+                }
+            }
+            sw.Stop();
+            res.Ms = sw.ElapsedMilliseconds;
+            res.Detail = weak.Count > 0 ? string.Join("; ", weak.ToArray()) : "";
+
+            bool coreAlive;
+            lock (procLock) { coreAlive = winws != null && !winws.HasExited; }
+            TuneReport(string.Format("    итог: {0} из {1}{2}", res.Passed, res.Total,
+                isOff ? "" : coreAlive ? ", ядро живо" : ", ЯДРО УМЕРЛО во время проверки"));
+
+            SendLog(res.AllOk ? "success" : res.Passed > 0 ? "warn" : "error",
+                string.Format("[{0}] {1}: успешных проб {2} из {3} за {4} мс{5}",
+                    v.Label, stage, res.Passed, res.Total, res.Ms,
+                    res.Detail.Length > 0 ? " (" + res.Detail + ")" : ""),
+                "Autotune");
+            return res;
+        }
+
+        private void SendTuneResult(TuneVariant v, VariantResult r)
+        {
+            SendTuneEvent(string.Format(
+                "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":{2},\"passed\":{3},\"total\":{4},\"ms\":{5},\"detail\":\"{6}\"}}",
+                v.Index, JsonEscape(v.Id), r.AllOk ? "true" : "false", r.Passed, r.Total, r.Ms,
+                JsonEscape(r.Detail)));
+        }
+
+        private void SendTunePhase(TuneVariant v, int count, string phase)
+        {
+            SendTuneEvent(string.Format(
+                "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"{3}\"}}",
+                v.Index, count, JsonEscape(v.Id), phase));
+        }
+
+        /// <summary>
+        /// Один круг перебора в два этапа: быстрый отсев и полная проверка.
+        /// </summary>
+        /// <remarks>
+        /// Полная проверка — три попытки на цель — на двадцати вариантах шла
+        /// бы минут восемь. Поэтому сначала каждый вариант получает одну
+        /// попытку на цель: заблокированный отсеивается на первой же закрытой
+        /// цели, и это почти всё время подбора. Прошедшие отсев проверяются
+        /// полностью: одна удачная попытка ничего не доказывает, многие DPI
+        /// пропускают первое соединение и режут следующие.
+        ///
+        /// Отсев останавливается, когда набралось AutotuneFinalists кандидатов.
+        /// Если ни один не выдержал полной проверки, отсев продолжается с того
+        /// места, где остановился: иначе «пропускает первое соединение» могло
+        /// бы спрятать рабочий вариант в хвосте списка.
+        ///
+        /// Эталон («off») проверяется сразу полностью: от него зависит, нужен
+        /// ли перебор вообще, и ошибиться здесь дороже всего.
+        /// </remarks>
+        private async Task<RoundOutcome> RunTuneRound(System.Collections.Generic.List<TuneVariant> plan,
+            System.Collections.Generic.List<TuneProbe> probes, int count)
+        {
+            int next = 0;
+            while (next < plan.Count)
+            {
+                var finalists = new System.Collections.Generic.List<TuneVariant>();
+
+                // --- Отсев ---
+                for (; next < plan.Count && finalists.Count < AutotuneFinalists; next++)
+                {
+                    if (autotuneCancel) { SendLog("warn", "Автоподбор прерван.", "Autotune"); return RoundOutcome.Cancelled; }
+                    var v = plan[next];
+
+                    if (v.Id == "off")
+                    {
+                        var b = await TestVariant(v, probes, count, AutotuneAttempts, "эталон");
+                        // Рукопожатие без обхода проходит — но это ещё не «обход
+                        // не нужен»: ТСПУ может пропускать приветствие и
+                        // замораживать соединение после первых 16–20 КБ.
+                        await CheckInBrowser(v, b, count);
+                        if (!b.BrowserOk)
+                            SendLog("warn", "Без обхода рукопожатие проходит, а страница в браузере не грузится — блокировка есть, перебираю стратегии.", "Autotune");
+                        SendTuneResult(v, b);
+                        // Эталон прошёл полностью — блокировки нет, и перебор
+                        // стратегий ничего не даст. Говорим об этом прямо.
+                        if (b.AllOk && !autotuneCancel)
+                        {
+                            SendLog("success",
+                                "Цели открываются и без обхода — блокировки не видно. Перебор стратегий прекращён. " +
+                                "Если приложение всё равно не работает, дело не в DPI: проверьте VPN, прокси и кэш самого приложения.",
+                                "Autotune");
+                            return RoundOutcome.NotNeeded;
+                        }
+                        continue;
+                    }
+
+                    var r = await TestVariant(v, probes, count, 1, "отсев");
+                    if (autotuneCancel) continue;
+                    if (r.AllOk)
+                    {
+                        finalists.Add(v);
+                        SendTunePhase(v, count, "finalist");
+                    }
+                    else
+                    {
+                        SendTuneResult(v, r);
+                    }
+                }
+
+                // --- Полная проверка ---
+                bool winner = false;
+                foreach (var v in finalists)
+                {
+                    if (autotuneCancel) { SendLog("warn", "Автоподбор прерван.", "Autotune"); return RoundOutcome.Cancelled; }
+                    var r = await TestVariant(v, probes, count, AutotuneAttempts, "полная проверка");
+                    await CheckInBrowser(v, r, count);
+                    SendTuneResult(v, r);
+                    if (r.AllOk) winner = true;
+                }
+
+                if (winner)
+                {
+                    // Остальные варианты не понадобились — помечаем их, чтобы
+                    // таблица не висела «в очереди».
+                    for (int k = next; k < plan.Count; k++) SendTunePhase(plan[k], count, "skipped");
+                    return RoundOutcome.Winner;
+                }
+                if (autotuneCancel) { SendLog("warn", "Автоподбор прерван.", "Autotune"); return RoundOutcome.Cancelled; }
+                if (next < plan.Count && finalists.Count > 0)
+                    SendLog("info", "Ни один кандидат не выдержал полной проверки — продолжаю отсев.", "Autotune");
+            }
+            return RoundOutcome.Exhausted;
+        }
 
         private void RunAutotune(string payload)
         {
@@ -3281,6 +4063,22 @@ namespace Zapret2App
             string[] hosts = head[1].Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
             string[] rawVariants = head[2].Split(new[] { '\x1e' }, StringSplitOptions.RemoveEmptyEntries);
 
+            // Четвёртое поле (с 0.4.2): страницы для проверки в браузере,
+            // «адрес|ожидаемая строка» через \x1e.
+            tuneBrowserChecks = new System.Collections.Generic.List<BrowserCheck>();
+            if (head.Length >= 4)
+            {
+                foreach (var item in head[3].Split(new[] { '\x1e' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int bar = item.LastIndexOf('|');
+                    if (bar <= 0) continue;
+                    string url = item.Substring(0, bar);
+                    if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) continue;
+                    tuneBrowserChecks.Add(new BrowserCheck { Url = url, Marker = item.Substring(bar + 1) });
+                }
+            }
+            browserMissingReported = false;
+
             // Эталон («обход выключен») идёт первым, а не седьмой строкой в
             // списке. Его результат меняет смысл всего остального: если цели
             // открываются и без обхода, перебирать стратегии незачем, а если
@@ -3296,6 +4094,12 @@ namespace Zapret2App
                 tuneReport.Append("Автоподбор, ").Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"))
                     .Append(", версия ").Append(AppVersion).Append("\r\n");
                 tuneReport.Append("Цели: ").Append(head[1]).Append("\r\n");
+                if (tuneBrowserChecks.Count > 0)
+                {
+                    tuneReport.Append("Проверка в браузере у финалистов: ");
+                    foreach (var c in tuneBrowserChecks) tuneReport.Append(c.Url).Append(' ');
+                    tuneReport.Append("\r\n");
+                }
                 tuneReport.Append("Строки ядра о пробах видны только с --debug: без него счётчики ядра будут нулевыми.\r\n");
             }
             IPAddress probeBind = FindPhysicalLocalAddress();
@@ -3315,6 +4119,15 @@ namespace Zapret2App
                     {
                         string host = h.Trim();
                         if (host.Length == 0) continue;
+                        // «имя:порт» — цель не на 443 (медиасерверы Discord).
+                        int port = 443;
+                        int colon = host.LastIndexOf(':');
+                        if (colon > 0)
+                        {
+                            int parsed;
+                            if (int.TryParse(host.Substring(colon + 1), out parsed) && parsed > 0 && parsed < 65536) port = parsed;
+                            host = host.Substring(0, colon);
+                        }
                         try
                         {
                             var addrs = Dns.GetHostAddresses(host);
@@ -3341,19 +4154,20 @@ namespace Zapret2App
                             // Браузер в такой ситуации просто идёт к следующему
                             // адресу. Проверка обязана вести себя так же, иначе
                             // она меряет доступность одного адреса, а не блокировку.
-                            string ip = PickReachable(candidates, host);
-                            if (ip == null)
+                            int at = PickReachable(candidates, 0, host, port);
+                            if (at < 0)
                             {
                                 SendLog("error",
-                                    "Ни один адрес " + host + " не отвечает на порт 443 (" +
+                                    "Ни один адрес " + host + " не отвечает на порт " + port + " (" +
                                     string.Join(", ", candidates.ToArray()) + "). " +
                                     "Это не похоже на блокировку по имени сайта: соединение не устанавливается вовсе. " +
                                     "Цель исключена из проверки.", "Autotune");
                                 continue;
                             }
 
-                            probes.Add(new TuneProbe { Host = host, Ip = ip });
-                            SendLog("info", string.Format("Цель {0} -> {1}{2}", host, ip,
+                            string ip = candidates[at];
+                            probes.Add(new TuneProbe { Host = host, Ip = ip, Port = port, Candidates = candidates, IpIndex = at });
+                            SendLog("info", string.Format("Цель {0} -> {1}{2}", port == 443 ? host : host + ":" + port, ip,
                                 candidates.Count > 1 ? " (из " + candidates.Count + " адресов)" : ""), "Autotune");
                         }
                         catch (Exception ex)
@@ -3369,116 +4183,34 @@ namespace Zapret2App
                     }
 
                     // --- Перебор ------------------------------------------
+                    var plan = new System.Collections.Generic.List<TuneVariant>();
                     for (int i = 0; i < rawVariants.Length; i++)
                     {
-                        if (autotuneCancel)
-                        {
-                            SendLog("warn", "Автоподбор прерван.", "Autotune");
-                            break;
-                        }
-
                         string[] parts = rawVariants[i].Split(new[] { '|' }, 3);
                         if (parts.Length < 3) continue;
-                        string id = parts[0], label = parts[1], args = parts[2];
+                        plan.Add(new TuneVariant { Index = i, Id = parts[0], Label = parts[1], Args = parts[2] });
+                    }
 
+                    for (int round = 0; ; round++)
+                    {
+                        foreach (var pr in probes) { pr.Tested = false; pr.EverPassed = false; }
+
+                        var outcome = await RunTuneRound(plan, probes, rawVariants.Length);
+                        if (outcome != RoundOutcome.Exhausted) break;
+
+                        // Круг закончился без победителя. Если какая-то цель не
+                        // открылась ни при одном варианте, виноват может быть
+                        // сам адрес, а не стратегии: у Discord на ДомРу адрес
+                        // 162.159.137.232 принимал TCP, но молчал на ClientHello
+                        // при любом обходе, а соседние адреса открывались.
+                        // Меняем такой цели адрес и проходим варианты заново.
+                        if (autotuneCancel || round >= AutotuneAddressRetries) break;
+                        if (!SwitchStuckProbes(probes)) break;
+                        // Интерфейс сбрасывает таблицу в очередь: иначе
+                        // второй круг пишет поверх готовых строк, а
+                        // прогресс мастера стоит на 100%.
                         SendTuneEvent(string.Format(
-                            "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"starting\"}}",
-                            i, rawVariants.Length, JsonEscape(id)));
-
-                        StopZapretProcess(false);
-
-                        // Эталон гоняется с полностью остановленным ядром, а не
-                        // с отключённым профилем: вопрос «а блокируют ли вообще»
-                        // должен проверяться так, как будто программы нет.
-                        bool up = (id == "off") ? true : StartCoreForTune(args);
-
-                        if (!up)
-                        {
-                            SendLog("error", string.Format("[{0}] ядро не запустилось — вариант пропущен.", label), "Autotune");
-                            SendTuneEvent(string.Format(
-                                "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":false,\"passed\":0,\"total\":{2},\"ms\":0,\"detail\":\"ядро не запустилось\"}}",
-                                i, JsonEscape(id), probes.Count));
-                            continue;
-                        }
-
-                        // Драйвер уже загружен (StartZapretProcess ждал 1,5 с),
-                        // но conntrack ядра пуст — даём ему полсекунды.
-                        await Task.Delay(600);
-
-                        SendTuneEvent(string.Format(
-                            "{{\"type\":\"autotune_step\",\"index\":{0},\"total\":{1},\"id\":\"{2}\",\"phase\":\"testing\"}}",
-                            i, rawVariants.Length, JsonEscape(id)));
-
-                        TuneReport("");
-                        TuneReport(string.Format("=== [{0}] {1}", id, label));
-                        TuneReport(id == "off" ? "    ядро остановлено" : "    winws " + args);
-
-                        // Каждая цель проверяется трижды. Счёт успехов, а не
-                        // галочка: «3 из 3» и «2 из 3» — принципиально разные
-                        // вещи, второе означает, что вариант отваливается.
-                        int passed = 0;
-                        int total = probes.Count * AutotuneAttempts;
-                        var weak = new System.Collections.Generic.List<string>();
-                        var sw = Stopwatch.StartNew();
-
-                        for (int t = 0; t < probes.Count; t++)
-                        {
-                            if (autotuneCancel) break;
-                            var pr = probes[t];
-                            int ok = await ProbeTarget(pr, AutotuneAttempts);
-                            passed += ok;
-                            if (ok < AutotuneAttempts) weak.Add(pr.Host + ": " + ok + " из " + AutotuneAttempts);
-
-                            // Цель не открылась ни разу — вариант не годится, и
-                            // остальные цели проверять незачем. Все они нужны
-                            // одновременно: клиент Discord без discord.com
-                            // застревает на заставке, как бы ни работал шлюз.
-                            // Каждая такая цель стоила 12 секунд ожидания, и
-                            // подбор на восемь вариантов шёл почти пять минут —
-                            // новичок столько не ждёт. Эталон тоже обрывается:
-                            // одной закрытой цели достаточно, чтобы понять,
-                            // что блокировка есть.
-                            if (ok == 0 && t + 1 < probes.Count)
-                            {
-                                for (int r = t + 1; r < probes.Count; r++)
-                                {
-                                    weak.Add(probes[r].Host + ": не проверялась");
-                                }
-                                TuneReport("    остальные цели не проверялись: " + pr.Host + " не открылся ни разу");
-                                break;
-                            }
-                        }
-                        sw.Stop();
-
-                        bool allOk = passed == total;
-                        string detail = weak.Count > 0 ? string.Join("; ", weak.ToArray()) : "";
-                        bool coreAlive;
-                        lock (procLock) { coreAlive = winws != null && !winws.HasExited; }
-                        TuneReport(string.Format("    итог: {0} из {1}{2}", passed, total,
-                            id == "off" ? "" : coreAlive ? ", ядро живо" : ", ЯДРО УМЕРЛО во время проверки"));
-
-                        SendLog(allOk ? "success" : passed > 0 ? "warn" : "error",
-                            string.Format("[{0}] успешных проб {1} из {2} за {3} мс{4}",
-                                label, passed, total, sw.ElapsedMilliseconds,
-                                detail.Length > 0 ? " (" + detail + ")" : ""),
-                            "Autotune");
-
-                        SendTuneEvent(string.Format(
-                            "{{\"type\":\"autotune_result\",\"index\":{0},\"id\":\"{1}\",\"ok\":{2},\"passed\":{3},\"total\":{4},\"ms\":{5},\"detail\":\"{6}\"}}",
-                            i, JsonEscape(id), allOk ? "true" : "false", passed, total, sw.ElapsedMilliseconds,
-                            JsonEscape(detail)));
-
-                        // Эталон прошёл полностью — блокировки нет, и перебор
-                        // стратегий ничего не даст. Останавливаемся и говорим
-                        // об этом прямо, вместо пяти минут бессмысленной работы.
-                        if (id == "off" && allOk)
-                        {
-                            SendLog("success",
-                                "Цели открываются и без обхода — блокировки не видно. Перебор стратегий прекращён. " +
-                                "Если приложение всё равно не работает, дело не в DPI: проверьте VPN, прокси и кэш самого приложения.",
-                                "Autotune");
-                            break;
-                        }
+                            "{{\"type\":\"autotune_round\",\"round\":{0}}}", round + 1));
                     }
                 }
                 catch (Exception ex)
@@ -3753,6 +4485,10 @@ namespace Zapret2App
                     else if (rawMsg == "kill_stale_winws")
                     {
                         KillStaleWinws();
+                    }
+                    else if (rawMsg == "enable_tcp_timestamps")
+                    {
+                        Task.Run(() => EnableTcpTimestamps());
                     }
                     else if (rawMsg == "autotune_cancel")
                     {

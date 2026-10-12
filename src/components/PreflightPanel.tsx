@@ -18,7 +18,7 @@ import { loadSetting, saveSetting } from '../lib/settings';
 const COLLAPSED_KEY = 'zapret2_preflight_collapsed_v1';
 
 export const PreflightPanel: React.FC = () => {
-  const { preflight, runPreflight, theme } = useApp();
+  const { preflight, runPreflight, runPreflightAction, theme } = useApp();
   const [collapsed, setCollapsedState] = useState<boolean>(
     () => loadSetting(COLLAPSED_KEY) === '1'
   );
@@ -94,10 +94,18 @@ export const PreflightPanel: React.FC = () => {
                 }`}
               >
                 <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${color}`} />
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-200">{item.title}</div>
                   <div className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">{item.detail}</div>
                 </div>
+                {item.action && item.actionLabel && (
+                  <button
+                    onClick={() => runPreflightAction(item.action!)}
+                    className="shrink-0 self-center text-[10px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-500 hover:bg-indigo-500/30"
+                  >
+                    {item.actionLabel}
+                  </button>
+                )}
               </div>
             );
           })}

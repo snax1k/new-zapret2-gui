@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.4.0"
+    [string]$Version = "0.4.2-test"
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,9 +17,9 @@ Write-Host "== Корень проекта: $root" -ForegroundColor Cyan
 # Если AppVersion в NativeApp.cs и APP_VERSION в AppContext.tsx разойдутся,
 # проверка обновлений начнёт врать: предлагать уже установленное либо
 # молчать о вышедшем.
-$nativeMatch = Select-String -Path "src-native\NativeApp.cs" -Pattern 'AppVersion\s*=\s*"([\d.]+)"' | Select-Object -First 1
-$webMatch = Select-String -Path "src\context\AppContext.tsx" -Pattern "APP_VERSION\s*=\s*'([\d.]+)'" | Select-Object -First 1
-$pkgMatch = Select-String -Path "package.json" -Pattern '"version"\s*:\s*"([\d.]+)"' | Select-Object -First 1
+$nativeMatch = Select-String -Path "src-native\NativeApp.cs" -Pattern 'AppVersion\s*=\s*"([\d.]+(?:-[\w]+)?)"' | Select-Object -First 1
+$webMatch = Select-String -Path "src\context\AppContext.tsx" -Pattern "APP_VERSION\s*=\s*'([\d.]+(?:-[\w]+)?)'" | Select-Object -First 1
+$pkgMatch = Select-String -Path "package.json" -Pattern '"version"\s*:\s*"([\d.]+(?:-[\w]+)?)"' | Select-Object -First 1
 if (-not $nativeMatch -or -not $webMatch -or -not $pkgMatch) { throw "Не удалось прочитать версию из исходников" }
 $nativeVer = $nativeMatch.Matches[0].Groups[1].Value
 $webVer = $webMatch.Matches[0].Groups[1].Value

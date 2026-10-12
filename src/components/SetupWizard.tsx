@@ -381,7 +381,9 @@ const TUNE_TEXT: Record<StrategyGroup, {
     targets: [
       { host: 'discord.com', what: 'сайт и вход в аккаунт' },
       { host: 'gateway.discord.gg', what: 'подключение приложения к серверу' },
-      { host: 'updates.discord.com', what: 'обновления — с них начинается запуск' }
+      { host: 'cdn.discordapp.com', what: 'аватары и картинки' },
+      { host: 'updates.discord.com', what: 'обновления — с них начинается запуск' },
+      { host: 'latency.discord.media', what: 'медиасерверы — подключение к голосовым' }
     ],
     note: 'Сам Discord открывать не нужно. Голосовые звонки обрабатываются отдельно и уже включены.',
     afterFound: 'Если Discord был открыт — перезапустите его: он запоминает неудачные подключения. ' +
@@ -409,8 +411,12 @@ const TIPS = [
   'Подробный отчёт проверки сохраняется в папку логов — он пригодится, если что-то пойдёт не так.'
 ];
 
-/** Средняя цена одного варианта, по замерам: нерабочий ~13 с, рабочий ~4 с. */
-const SECONDS_PER_VARIANT = 13;
+/**
+ * Средняя цена одного варианта. С быстрым отсевом нерабочий вариант стоит
+ * одну попытку — около 6 с вместе с перезапуском ядра, — а полностью
+ * проверяются только несколько первых прошедших.
+ */
+const SECONDS_PER_VARIANT = 7;
 
 const formatLeft = (sec: number): string =>
   sec < 60 ? `меньше минуты` : `около ${Math.round(sec / 60)} мин`;
@@ -439,6 +445,8 @@ const TuneStep: React.FC<{
   const sawRunning = useRef(false);
 
   const apply = (id: AutotuneRow['id']) => {
+    // Строка «combo» бывает только у сборки пресета, мастер её не запускает.
+    if (id === 'combo') return;
     if (group === 'youtube') setYoutubeStrategy(id);
     else setSitesStrategy(id);
   };
@@ -528,7 +536,7 @@ const TuneStep: React.FC<{
         <div className="grid grid-cols-3 gap-3">
           {[
             { n: '1', t: 'Есть ли блокировка', d: 'Сначала проверим без обхода. Если всё открывается — менять ничего не нужно.' },
-            { n: '2', t: 'Пробуем способы', d: 'По очереди до семи способов, каждый — настоящими соединениями.' },
+            { n: '2', t: 'Пробуем способы', d: 'Три десятка способов: быстрый отсев, полная проверка лучших и загрузка страницы в браузере.' },
             { n: '3', t: 'Применяем лучший', d: 'Подошедший способ включится сам. Займёт 1–2 минуты.' }
           ].map(s => (
             <div key={s.n} className="p-3.5 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] space-y-1.5">
@@ -549,7 +557,8 @@ const TuneStep: React.FC<{
   // ---- Идёт проверка -----------------------------------------------------
   if (phase === 'running') {
     const rows = autotuneRows;
-    const done = rows.filter(r => r.phase === 'done').length;
+    // «Не понадобился» — тоже конец пути для строки.
+    const done = rows.filter(r => r.phase === 'done' || r.phase === 'skipped').length;
     const current = rows.find(r => r.phase === 'starting' || r.phase === 'testing');
     const strategies = rows.filter(r => r.id !== 'off');
     const currentIndex = current ? strategies.findIndex(r => r.id === current.id) + 1 : 0;
@@ -592,12 +601,14 @@ const TuneStep: React.FC<{
                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-medium ${
                   r.phase === 'done'
                     ? r.ok ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-black/5 dark:bg-white/5 text-slate-400'
-                    : r.phase === 'idle' ? 'bg-black/[0.03] dark:bg-white/[0.03] text-slate-400'
+                    : r.phase === 'finalist' ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                    : r.phase === 'idle' || r.phase === 'skipped' ? 'bg-black/[0.03] dark:bg-white/[0.03] text-slate-400'
                     : 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-300'
                 }`}
               >
                 {r.phase === 'done' ? (r.ok ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />)
-                  : r.phase === 'idle' ? <Circle className="w-3 h-3" />
+                  : r.phase === 'finalist' ? <CheckCircle2 className="w-3 h-3" />
+                  : r.phase === 'idle' || r.phase === 'skipped' ? <Circle className="w-3 h-3" />
                   : <Loader2 className="w-3 h-3 animate-spin" />}
                 {r.id === 'off' ? 'без обхода' : r.label}
               </span>

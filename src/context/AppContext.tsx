@@ -19,6 +19,7 @@ import {
   NetRoute,
   PreflightItem,
   AutotuneRow,
+  TuneVerdicts,
   TgProxyState,
   TgProxySettings
 } from '../types';
@@ -27,8 +28,9 @@ import {
   buildPresetCommand,
   DEFAULT_TOGGLES,
   findYoutubeStrategy,
-  YOUTUBE_STRATEGIES
+  strategiesFor
 } from '../lib/zapretCommand';
+import { summarizeAutotune, AutotuneVerdictKind } from '../lib/autotune';
 import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
 import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 import {
@@ -45,7 +47,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.4.0';
+export const APP_VERSION = '0.4.2-test';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -78,13 +80,24 @@ export const APP_REPO = 'snax1k/new-zapret2-gui';
  * «0.1.10» оказалась бы старше «0.1.9».
  */
 export function compareVersions(a: string, b: string): number {
-  const norm = (v: string) => v.trim().replace(/^v/i, '').split(/[.\-+]/);
-  const pa = norm(a), pb = norm(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = parseInt(pa[i] || '0', 10) || 0;
-    const nb = parseInt(pb[i] || '0', 10) || 0;
+  // Суффикс вроде «-test» — предварительная сборка: 0.4.1-test старше
+  // 0.4.0, но младше выпущенной 0.4.1, иначе тестовая сборка никогда не
+  // предложила бы обновиться до настоящего релиза.
+  const split = (v: string) => {
+    const clean = v.trim().replace(/^v/i, '');
+    const dash = clean.indexOf('-');
+    return {
+      nums: (dash === -1 ? clean : clean.slice(0, dash)).split('.'),
+      pre: dash !== -1
+    };
+  };
+  const pa = split(a), pb = split(b);
+  for (let i = 0; i < Math.max(pa.nums.length, pb.nums.length); i++) {
+    const na = parseInt(pa.nums[i] || '0', 10) || 0;
+    const nb = parseInt(pb.nums[i] || '0', 10) || 0;
     if (na !== nb) return na - nb;
   }
+  if (pa.pre !== pb.pre) return pa.pre ? -1 : 1;
   return 0;
 }
 
@@ -147,7 +160,7 @@ const INITIAL_PRESETS: Preset[] = [
     tags: ['YouTube', 'Discord RTC', 'multisplit+seqovl'],
     args: {
       wfTcp: '80,443,2053,2083,2087,2096,8443',
-      wfUdp: '443,19294-19344,50000-65535',
+      wfUdp: '443,19294-19344,50000-50100',
       desyncMode: 'multisplit',
       rawArgs: [
         // 1. QUIC (HTTP/3) для доменов из списков.
@@ -163,9 +176,18 @@ const INITIAL_PRESETS: Preset[] = [
         // на установке соединения. Так как TTL у фейка не ограничен, он доходит до
         // голосового сервера — и чем он безобиднее, тем лучше. Подстановка сюда
         // QUIC-пакета на 1200 байт ломала подключение к части комнат.
-        '--filter-udp=19294-19344,50000-65535 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6',
+        // (У Flowseal в --dpi-desync-fake-discord стоит ровно такой пакет —
+        // ACTIVE_DISCORD_UDP.bin начинается с заголовка QUIC Initial. Не берём.)
+        //
+        // 50000-50100 вместо 50000-65535 (с 0.4.2, как у Flowseal): широкий
+        // диапазон затягивал в ядро весь UDP игр, Steam и WebRTC — каждый пакет
+        // проходил через пользовательский режим ради того, чтобы фильтр l7
+        // сказал «не Discord».
+        '--filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --dpi-desync=fake --dpi-desync-repeats=6',
 
         // 3. Медиасерверы Discord на альтернативных TCP-портах Cloudflare.
+        // Опции десинхронизации здесь — значение по умолчанию: с 0.4.2 профиль
+        // получает стратегию группы «Сайты и Discord» (applyStrategy).
         `--filter-tcp=2053,2083,2087,2096,8443 --hostlist-domains=discord.media --dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-split-seqovl=681 --dpi-desync-split-seqovl-pattern=${FAKE_TLS}`,
 
         // 4. YouTube / Google.
@@ -272,6 +294,26 @@ const INITIAL_DIAGNOSTICS: DiagnosticsItem[] = [
   }
 ];
 
+/** Что подбор нашёл для одной группы профилей. */
+export interface AutoPresetPick {
+  kind: AutotuneVerdictKind;
+  /** Стратегия, которая войдёт в пресет. При not-needed и none — текущая. */
+  id: YoutubeStrategyId;
+  passed: number;
+  total: number;
+}
+
+export interface AutoPresetState {
+  stage: 'idle' | 'sites' | 'youtube' | 'verify' | 'done' | 'cancelled';
+  sites?: AutoPresetPick;
+  youtube?: AutoPresetPick;
+  /** Итог проверки собранной команды целиком. */
+  verify?: AutotuneRow;
+  /** Что стояло до применения — для «Вернуть как было». */
+  prev?: { youtube: YoutubeStrategyId; sites: YoutubeStrategyId };
+  applied: boolean;
+}
+
 interface AppContextType {
   status: AppStatus;
   activeTab: TabType;
@@ -312,6 +354,10 @@ interface AppContextType {
   /** Предполётная проверка окружения: что помешает обходу сработать. */
   preflight: PreflightItem[];
   runPreflight: () => void;
+  /** Кнопка рядом с пунктом проверки окружения (например, включить метки времени TCP). */
+  runPreflightAction: (action: string) => void;
+  /** Что последний подбор сказал о каждой стратегии — для отметок в выборе стратегии. */
+  tuneVerdicts: TuneVerdicts;
 
   /** Автоподбор стратегии YouTube. */
   autotuneRows: AutotuneRow[];
@@ -321,6 +367,14 @@ interface AppContextType {
   setAutotuneGroup: (g: StrategyGroup) => void;
   startAutotune: (group?: StrategyGroup) => void;
   cancelAutotune: () => void;
+  /**
+   * Сборка пресета: подбор сайтов и Discord, затем YouTube, затем проверка
+   * собранной команды целиком. Применяется только по кнопке.
+   */
+  autoPreset: AutoPresetState;
+  startAutoPreset: () => void;
+  applyAutoPreset: () => void;
+  undoAutoPreset: () => void;
   /** Модалка автоподбора открывается и с главной, и из «Пресетов». */
   isAutotuneModalOpen: boolean;
   setIsAutotuneModalOpen: (open: boolean) => void;
@@ -611,6 +665,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [isAutotuneRunning, setIsAutotuneRunning] = useState(false);
   const [isAutotuneModalOpen, setIsAutotuneModalOpen] = useState(false);
   const [autotuneGroup, setAutotuneGroup] = useState<StrategyGroup>('youtube');
+  const [autoPreset, setAutoPreset] = useState<AutoPresetState>({ stage: 'idle', applied: false });
+  // Вердикты последнего подбора по группам. Случай 2026-10-12: подбор нашёл
+  // для Discord четыре рабочих варианта, а стоял пятый, вручную выбранный и
+  // ни разу не проверенный, — и Discord открывался через раз. Теперь выбор
+  // стратегии показывает, что подбор о ней знает.
+  const [tuneVerdicts, setTuneVerdicts] = useState<TuneVerdicts>(() => {
+    try { return JSON.parse(loadSetting('zapret2_tune_verdicts_v1') || '{}'); } catch { return {}; }
+  });
+  /** Какая группа сейчас в переборе (null — итоговая проверка пресета). */
+  const tuneGroupRef = useRef<StrategyGroup | null>(null);
+  // Отмену нужно отличать от «ничего не нашлось»: после неё сборка не
+  // переходит к следующему шагу.
+  const tuneCancelRequested = useRef(false);
+  const sawTuneRunning = useRef(false);
 
   // Handle IPC Messages from Native C# Host
   useEffect(() => {
@@ -672,6 +740,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                 ? { ...r, phase: 'done', ok: !!data.ok, passed: data.passed || 0,
                     total: data.total || 0, ms: data.ms || 0, detail: data.detail || '' }
                 : r));
+          } else if (data.type === 'autotune_round') {
+            // Ни один вариант не прошёл, и у какой-то цели сменился адрес —
+            // перебор идёт заново, прошлые результаты больше не в счёт.
+            setAutotuneRows(prev => prev.map(r => ({
+              ...r, phase: 'idle' as const, ok: false, passed: 0, total: 0, ms: 0, detail: ''
+            })));
           } else if (data.type === 'autotune_done') {
             setIsAutotuneRunning(false);
           } else if (data.type === 'diag_step') {
@@ -1126,6 +1200,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
+  const runPreflightAction = (action: string) => {
+    // Только известные команды: строка приходит из нативной части, но
+    // отправлять обратно что попало незачем.
+    if (action !== 'enable_tcp_timestamps') return;
+    if (window.chrome?.webview) window.chrome.webview.postMessage(action);
+  };
+
   const runPreflight = () => {
     if (window.chrome?.webview) window.chrome.webview.postMessage('run_preflight');
   };
@@ -1197,6 +1278,52 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
    * а эталон для сравнения, и проверять его отдельно смысла нет — если он
    * пройдёт, значит обход для YouTube вообще не нужен.
    */
+  /** Цели проверки по группам. */
+  const TUNE_HOSTS: Record<StrategyGroup, string> = {
+    // Для сайтов это именно те хосты, на которых клиент Discord застревает
+    // на заставке «Starting»: сначала он спрашивает обновления, потом API,
+    // потом открывает шлюз.
+    //
+    // С 0.4.2 добавлены cdn.discordapp.com (аватары, картинки — на них клиент
+    // «долго грузится») и latency.discord.media:2053 — медиасерверы, которые
+    // идут отдельным профилем ядра на альтернативных портах Cloudflare.
+    // discord.com первым: проба обрывает вариант на первой закрытой цели.
+    sites: 'discord.com,gateway.discord.gg,cdn.discordapp.com,updates.discord.com,latency.discord.media:2053',
+    youtube: 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com'
+  };
+
+  /**
+   * Страницы, которые финалисты подбора открывают в настоящем браузере
+   * (Edge без окна): «адрес|строка, которая обязана быть на странице».
+   * Проба смотрит только на рукопожатие; браузер загружает страницу со
+   * всеми подресурсами — так ловится заморозка соединения после 16–20 КБ.
+   */
+  const BROWSER_CHECKS: Record<StrategyGroup, string> = {
+    sites: 'https://discord.com/login|Discord',
+    youtube: 'https://www.youtube.com/|YouTube'
+  };
+
+  /** Куда вернуть ядро после перебора: к текущей стратегии или оставить выключенным. */
+  const tuneRestoreArgs = () => status === 'connected'
+    ? buildPresetArgs(activePreset, quickToggles, netRoute?.physIfIdx || 0)
+    : '';
+
+  /** Отправляет перебор в нативную часть. */
+  const postTune = (
+    rows: AutotuneRow[], hosts: string, argsFor: (row: AutotuneRow) => string,
+    group: StrategyGroup | null, browserChecks: string
+  ) => {
+    if (!window.chrome?.webview) return;
+    tuneGroupRef.current = group;
+    tuneCancelRequested.current = false;
+    sawTuneRunning.current = false;
+    setAutotuneRows(rows);
+    setIsAutotuneRunning(true);
+    const body = rows.map(r => [r.id, r.label, argsFor(r)].join('|')).join('\x1e');
+    window.chrome.webview.postMessage('save_lists:' + serializeLists());
+    window.chrome.webview.postMessage('autotune:' + [tuneRestoreArgs(), hosts, body, browserChecks].join('\x1f'));
+  };
+
   const startAutotune = (group: StrategyGroup = autotuneGroup) => {
     if (isAutotuneRunning) return;
     if (!window.chrome?.webview) {
@@ -1210,26 +1337,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Раньше он из подбора исключался вовсе, и вопрос «а нужен ли здесь
     // обход» не задавался никогда — человек перебирал семь стратегий, не
     // зная, что цель может открываться и без них.
-    const baseline = YOUTUBE_STRATEGIES.filter(s => s.id === 'off');
-    const variants = [...baseline, ...YOUTUBE_STRATEGIES.filter(s => s.id !== 'off')];
-    setAutotuneRows(variants.map(s => ({
+    // С 0.4.2 у каждой группы свой порядок и свой набор (STRATEGY_ORDER).
+    const list = strategiesFor(group);
+    const variants = [...list.filter(s => s.id === 'off'), ...list.filter(s => s.id !== 'off')];
+    const rows: AutotuneRow[] = variants.map(s => ({
       id: s.id, label: s.label, phase: 'idle' as const,
       ok: false, passed: 0, total: 0, ms: 0, detail: ''
-    })));
-    setIsAutotuneRunning(true);
-
-    // Куда вернуть ядро после перебора: если обход был включён — к текущей
-    // стратегии, если выключен — оставить выключенным.
-    const restore = status === 'connected'
-      ? buildPresetArgs(activePreset, quickToggles, netRoute?.physIfIdx || 0)
-      : '';
-
-    // Цели подбираются под группу. Для сайтов это именно те хосты, на
-    // которых клиент Discord застревает на заставке «Starting»: сначала он
-    // спрашивает обновления, потом API, потом открывает шлюз.
-    const hosts = group === 'youtube'
-      ? 'www.youtube.com,rr1---sn-4g5ednss.googlevideo.com'
-      : 'discord.com,gateway.discord.gg,updates.discord.com';
+    }));
+    const hosts = TUNE_HOSTS[group];
 
     // Режим «Весь трафик» снимает списки доменов, и первым на 443 выигрывает
     // профиль YouTube: всё HTTPS, включая Discord, уходит под его стратегию.
@@ -1244,29 +1359,153 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       );
     }
 
-    const body = variants
-      .map(s => {
-        // Подробный лог ядра обязателен: по нему отчёт подбора видит, дошла
-        // ли проба до ядра и обработало ли оно её. Без него счётчики пусты.
-        const base = { ...quickToggles, verboseLog: true, allTrafficMode: false };
-        const toggles = group === 'youtube'
-          ? { ...base, youtubeStrategy: s.id }
-          : { ...base, sitesStrategy: s.id };
-        return [s.id, s.label, buildPresetArgs(activePreset, toggles, netRoute?.physIfIdx || 0)].join('|');
-      })
-      .join('\x1e');
-
     addLog(
       'info',
       `Автоподбор (${group === 'youtube' ? 'YouTube' : 'сайты и Discord'}): ${variants.length} вариантов, цели ${hosts}`,
       'Autotune'
     );
-    window.chrome.webview.postMessage('save_lists:' + serializeLists());
-    window.chrome.webview.postMessage('autotune:' + [restore, hosts, body].join('\x1f'));
+    postTune(rows, hosts, r => {
+      // Подробный лог ядра обязателен: по нему отчёт подбора видит, дошла
+      // ли проба до ядра и обработало ли оно её. Без него счётчики пусты.
+      const base = { ...quickToggles, verboseLog: true, allTrafficMode: false };
+      const id = r.id as YoutubeStrategyId;
+      const toggles = group === 'youtube'
+        ? { ...base, youtubeStrategy: id }
+        : { ...base, sitesStrategy: id };
+      return buildPresetArgs(activePreset, toggles, netRoute?.physIfIdx || 0);
+    }, group, BROWSER_CHECKS[group]);
+  };
+
+  /**
+   * Сборка единого пресета.
+   *
+   * Профили в команде разделены --new и работают независимо, поэтому
+   * лучший вариант для каждого ищется отдельно, а потом они собираются в
+   * одну команду. Но ядро берёт ПЕРВЫЙ подходящий профиль (dp_find), и
+   * вместе варианты могут вести себя иначе, чем по одному, — поэтому в
+   * конце собранная команда проверяется целиком на всех целях сразу.
+   *
+   * Ничего не применяется само: встроенный пресет и ручные правки остаются,
+   * пока человек не нажмёт «Применить».
+   */
+  const startAutoPreset = () => {
+    if (isAutotuneRunning) return;
+    if (!window.chrome?.webview) {
+      addLog('error', 'Сборка пресета доступна только внутри приложения.', 'Autotune');
+      return;
+    }
+    addLog('info', 'Сборка пресета: шаг 1 из 3 — сайты и Discord.', 'Autotune');
+    setAutoPreset({ stage: 'sites', applied: false });
+    startAutotune('sites');
+  };
+
+  /** Что подбор группы дал для пресета. */
+  const pickFromRows = (rows: AutotuneRow[], current: YoutubeStrategyId): AutoPresetPick => {
+    const s = summarizeAutotune(rows);
+    if ((s.kind === 'found' || s.kind === 'partial') && s.best) {
+      return { kind: s.kind, id: s.best.id as YoutubeStrategyId, passed: s.best.passed, total: s.best.total };
+    }
+    // Блокировки нет или не помогло ничего — оставляем то, что стоит сейчас:
+    // менять работающую настройку без доказательств незачем.
+    return { kind: s.kind, id: current, passed: 0, total: 0 };
+  };
+
+  const startComboCheck = (sitesId: YoutubeStrategyId, ytId: YoutubeStrategyId) => {
+    const rows: AutotuneRow[] = [{
+      id: 'combo', label: 'Собранный пресет целиком', phase: 'idle',
+      ok: false, passed: 0, total: 0, ms: 0, detail: ''
+    }];
+    const hosts = TUNE_HOSTS.sites + ',' + TUNE_HOSTS.youtube;
+    addLog('info', 'Сборка пресета: шаг 3 из 3 — проверка собранной команды на всех целях.', 'Autotune');
+    postTune(rows, hosts, () => buildPresetArgs(activePreset, {
+      ...quickToggles, verboseLog: true, allTrafficMode: false,
+      youtubeStrategy: ytId, sitesStrategy: sitesId
+    }, netRoute?.physIfIdx || 0), null, BROWSER_CHECKS.sites + '\x1e' + BROWSER_CHECKS.youtube);
+  };
+
+  // Переход сборки к следующему шагу, когда очередной перебор закончился.
+  // Конец узнаём так же, как мастер: подбор сначала пошёл, потом остановился.
+  useEffect(() => {
+    if (isAutotuneRunning) { sawTuneRunning.current = true; return; }
+    if (!sawTuneRunning.current) return;
+    sawTuneRunning.current = false;
+
+    // Запоминаем, что подбор узнал о стратегиях группы. Строки без итога
+    // (отменено, «не понадобился») прежний вердикт не трогают.
+    const group = tuneGroupRef.current;
+    if (group) {
+      const found: Partial<Record<YoutubeStrategyId, 'ok' | 'fail'>> = {};
+      for (const r of autotuneRows) {
+        if (r.phase !== 'done' || r.id === 'off' || r.id === 'combo') continue;
+        found[r.id] = r.ok ? 'ok' : 'fail';
+      }
+      if (Object.keys(found).length > 0) {
+        setTuneVerdicts(prev => {
+          const next = { ...prev, [group]: { ...(prev[group] || {}), ...found } };
+          saveSetting('zapret2_tune_verdicts_v1', JSON.stringify(next));
+          return next;
+        });
+      }
+    }
+
+    const stage = autoPreset.stage;
+    if (stage !== 'sites' && stage !== 'youtube' && stage !== 'verify') return;
+
+    if (tuneCancelRequested.current) {
+      addLog('warn', 'Сборка пресета остановлена.', 'Autotune');
+      setAutoPreset(prev => ({ ...prev, stage: 'cancelled' }));
+      return;
+    }
+
+    if (stage === 'sites') {
+      const sites = pickFromRows(autotuneRows, quickToggles.sitesStrategy);
+      setAutoPreset(prev => ({ ...prev, stage: 'youtube', sites }));
+      addLog('info', 'Сборка пресета: шаг 2 из 3 — YouTube.', 'Autotune');
+      startAutotune('youtube');
+    } else if (stage === 'youtube') {
+      const youtube = pickFromRows(autotuneRows, quickToggles.youtubeStrategy);
+      setAutoPreset(prev => ({ ...prev, stage: 'verify', youtube }));
+      startComboCheck(autoPreset.sites ? autoPreset.sites.id : quickToggles.sitesStrategy, youtube.id);
+    } else {
+      const verify = autotuneRows.find(r => r.id === 'combo');
+      setAutoPreset(prev => ({ ...prev, stage: 'done', verify }));
+      addLog(verify && verify.ok ? 'success' : 'warn',
+        verify && verify.ok
+          ? 'Сборка пресета: собранная команда прошла все пробы. Примените её в окне подбора.'
+          : 'Сборка пресета: собранная команда целиком прошла не все пробы — см. окно подбора.',
+        'Autotune');
+    }
+  }, [isAutotuneRunning]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const applyAutoPreset = () => {
+    const { sites, youtube } = autoPreset;
+    if (!sites || !youtube) return;
+    setQuickToggles(prev => {
+      const next = { ...prev, sitesStrategy: sites.id, youtubeStrategy: youtube.id };
+      applyToggles(next,
+        `Собранный пресет: сайты и Discord — ${findYoutubeStrategy(sites.id).label}, YouTube — ${findYoutubeStrategy(youtube.id).label}`);
+      setAutoPreset(ap => ({
+        ...ap, applied: true,
+        prev: { youtube: prev.youtubeStrategy, sites: prev.sitesStrategy }
+      }));
+      return next;
+    });
+  };
+
+  const undoAutoPreset = () => {
+    const back = autoPreset.prev;
+    if (!back) return;
+    setQuickToggles(prev => {
+      const next = { ...prev, sitesStrategy: back.sites, youtubeStrategy: back.youtube };
+      applyToggles(next, 'Собранный пресет отменён — стратегии возвращены как были.');
+      return next;
+    });
+    setAutoPreset(ap => ({ ...ap, applied: false, prev: undefined }));
   };
 
   const cancelAutotune = () => {
     if (!isAutotuneRunning) return;
+    tuneCancelRequested.current = true;
     addLog('warn', 'Отмена автоподбора...', 'Autotune');
     if (window.chrome?.webview) window.chrome.webview.postMessage('autotune_cancel');
   };
@@ -1717,12 +1956,18 @@ const parseReleaseHighlights = (body: string): string[] => {
         setSitesStrategy,
         preflight,
         runPreflight,
+        runPreflightAction,
+        tuneVerdicts,
         autotuneRows,
         isAutotuneRunning,
         autotuneGroup,
         setAutotuneGroup,
         startAutotune,
         cancelAutotune,
+        autoPreset,
+        startAutoPreset,
+        applyAutoPreset,
+        undoAutoPreset,
         isAutotuneModalOpen,
         setIsAutotuneModalOpen,
         logs,

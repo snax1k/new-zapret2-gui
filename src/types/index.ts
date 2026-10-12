@@ -133,11 +133,37 @@ export type StrategyGroup = 'youtube' | 'sites';
 export type YoutubeStrategyId =
   | 'seqovl568'
   | 'seqovl681'
+  | 'seqovl652-pos2'
   | 'seqovl-midsld'
   | 'fake-md5sig'
   | 'fake-badseq'
+  | 'fake-badseq-md5sig'
+  | 'fake-split-md5sig'
   | 'fake-autottl'
+  | 'fake-autottl-disorder'
+  | 'fake-rndsni'
+  | 'fake-datanoack'
+  | 'fake-badsum'
+  | 'fake-ttl4'
+  | 'fakedsplit-badseq'
+  | 'fakeddisorder-md5sig'
+  | 'hostfakesplit'
   | 'multidisorder'
+  | 'multisplit-sni'
+  | 'multisplit-pos2'
+  // 0.4.2: варианты по образцу Flowseal (zapret-discord-youtube).
+  | 'seqovl568-ru'
+  | 'ts-fake-ru'
+  | 'ts-seqovl664-ru'
+  | 'ts-hostfakesplit-ru'
+  | 'ts-hostfakesplit-ozon'
+  | 'ts-sni-yaru'
+  | 'ts-fakedsplit-ru'
+  | 'ts-fake-google'
+  | 'badseq1000'
+  | 'badseq2-fake'
+  | 'fake-tls-auto'
+  | 'seqovl679-sniext'
   | 'off';
 
 /** Ключи QuickToggleState с булевым значением — только их переключает toggleQuickSetting. */
@@ -151,14 +177,26 @@ export interface PreflightItem {
   level: 'ok' | 'warn' | 'error';
   title: string;
   detail: string;
+  /** Сообщение нативной части для кнопки рядом с пунктом (пусто — кнопки нет). */
+  action?: string;
+  actionLabel?: string;
 }
+
+/** Что последний подбор сказал о каждой стратегии группы. */
+export type TuneVerdict = 'ok' | 'fail';
+export type TuneVerdicts = Partial<Record<StrategyGroup, Partial<Record<YoutubeStrategyId, TuneVerdict>>>>;
 
 /** Состояние одного варианта в автоподборе стратегии. */
 export interface AutotuneRow {
-  id: YoutubeStrategyId;
+  /** Стратегия либо 'combo' — итоговая проверка собранного пресета. */
+  id: YoutubeStrategyId | 'combo';
   label: string;
-  /** idle — ещё не проверялся, starting — поднимается ядро, testing — идёт проверка. */
-  phase: 'idle' | 'starting' | 'testing' | 'done';
+  /**
+   * idle — ещё не проверялся, starting — поднимается ядро, testing — идёт
+   * проверка, finalist — прошёл быстрый отсев и ждёт полной проверки,
+   * skipped — не понадобился: победитель нашёлся раньше.
+   */
+  phase: 'idle' | 'starting' | 'testing' | 'finalist' | 'browser' | 'skipped' | 'done';
   ok: boolean;
   passed: number;
   total: number;
