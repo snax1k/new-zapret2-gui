@@ -1,293 +1,146 @@
 import React, { useState } from 'react';
-import {
-  Activity,
-  Play,
-  CheckCircle,
-  XCircle,
-  Loader2,
-  Sparkles,
-  Server,
-  ArrowRight,
-  ShieldAlert,
-  ChevronDown,
-  Info,
-  Check,
-  Globe2,
-  Lock
-} from 'lucide-react';
+import { Play, Loader2, ChevronDown, ChevronUp, Info, Check, ArrowRight } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { DiagnosticStep } from '../types';
+import { Button, Card, PageHeader, StatusDot } from '../components/ui';
 
+/** Короткие подписи шагов для цепочки DNS → TCP → TLS. */
+const SHORT = ['DNS', 'TCP', 'TLS · контроль', 'TLS'];
+
+const chipTone = (s: DiagnosticStep['status']) =>
+  s === 'success' ? 'bg-green-500/[0.12] text-green-300 border-green-500/[0.28]'
+    : s === 'blocked' || s === 'error' ? 'bg-red-500/[0.12] text-red-300 border-red-500/[0.28]'
+    : s === 'testing' ? 'bg-amber-500/[0.12] text-amber-300 border-amber-500/[0.28]'
+    : 'bg-s2 text-t3 border-line';
+
+/**
+ * Диагностика: пошаговая проверка цепочки DNS → TCP → TLS по целям.
+ * Контрольный шаг — рукопожатие с посторонним именем: если оно проходит, а
+ * с настоящим нет, рвут именно по имени сайта.
+ */
 export const DiagnosticsView: React.FC = () => {
-  const {
-    diagnostics, runDiagnostics, isDiagnosticsRunning, setActiveTab, theme,
-    status, preflight
-  } = useApp();
-  const [expandedId, setExpandedId] = useState<string>('yt-web');
+  const { diagnostics, runDiagnostics, isDiagnosticsRunning, setActiveTab, status, preflight } = useApp();
+  const [expandedId, setExpandedId] = useState<string>('');
 
-  // Итог считаем по реальным статусам. Раньше здесь висела зашитая надпись
-  // «100% УСПЕХ» — она показывалась всегда, в том числе когда тест ни разу
-  // не запускали и когда цели не отвечали вовсе.
+  // Итог считаем по реальным статусам: раньше здесь висела зашитая надпись
+  // «100% УСПЕХ», показывавшаяся всегда.
   const okCount = diagnostics.filter(d => d.status === 'success').length;
   const failCount = diagnostics.filter(d => d.status === 'blocked' || d.status === 'error').length;
   const neverRun = okCount + failCount === 0 && !isDiagnosticsRunning;
 
-  // Состояние обхода нужно, чтобы не советовать «проверьте, включён ли он»
-  // человеку, у которого он включён. А системный прокси объясняет самый
-  // частый и самый сбивающий с толку случай: сайты в браузере открываются,
-  // а проверка не проходит. Браузер идёт через прокси, проверка — напрямую.
+  // Системный прокси объясняет самый сбивающий с толку случай: сайты в
+  // браузере открываются, а проверка не проходит. Браузер идёт через прокси,
+  // проверка — напрямую.
   const bypassOn = status === 'connected';
   const proxyOn = preflight.some(p => p.id === 'proxy' && p.level !== 'ok');
 
+  const summary = isDiagnosticsRunning
+    ? 'Идёт проверка целей — результат появится ниже.'
+    : neverRun
+      ? 'Проверка ещё не запускалась. Она пройдёт по каждой цели пошагово и покажет, на каком шаге рвётся соединение.'
+      : failCount === 0
+        ? 'Отвечают все проверенные цели — обход справляется.'
+        : okCount === 0
+          ? proxyOn
+            ? `Не ответила ни одна цель, но судить по этому об обходе нельзя${bypassOn ? ' (он включён)' : ''}: включён системный прокси. Браузер ходит через него, а проверка — напрямую. Чтобы результат что-то значил, прокси нужно временно выключить.`
+            : bypassOn
+              ? 'Обход включён, но не ответила ни одна цель. Разверните любую: если рукопожатие с посторонним именем проходит, а с настоящим нет — рвут по имени сайта, и стоит запустить подбор.'
+              : 'Обход выключен, и цели не отвечают. Включите его на главной и повторите проверку — иначе сравнивать не с чем.'
+          : 'Разверните цель, которая не ответила, — видно, на каком шаге обрыв.';
+
   return (
-    <div className="h-full flex flex-col p-6 space-y-5 overflow-y-auto select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Activity className="w-5 h-5 text-indigo-500" />
-            Инспектор DPI и Диагностика блокировок
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Детальная пошаговая проверка (GoodCheck DPI Test) с контрольным шагом рукопожатия TLS
-          </p>
-        </div>
+    <div className="h-full overflow-y-auto p-5 flex flex-col gap-3.5 select-none">
+      <PageHeader
+        title="Диагностика доступности"
+        subtitle="Пошаговая проверка цепочки соединения DNS → TCP → TLS"
+        actions={
+          <Button icon={isDiagnosticsRunning ? Loader2 : Play} spin={isDiagnosticsRunning} onClick={runDiagnostics} disabled={isDiagnosticsRunning}>
+            {isDiagnosticsRunning ? 'Проверка…' : 'Запустить проверку'}
+          </Button>
+        }
+      />
 
-        <button
-          onClick={runDiagnostics}
-          disabled={isDiagnosticsRunning}
-          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-md ${
-            isDiagnosticsRunning
-              ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-500/30 cursor-not-allowed'
-              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-950/30 hover:scale-105'
-          }`}
-        >
-          {isDiagnosticsRunning ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>Тестирование пакетов...</span>
-            </>
-          ) : (
-            <>
-              <Play className="w-4 h-4 fill-current" />
-              <span>Запустить полный тест</span>
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* Recommended Strategy Box */}
-      <div className={`p-4 rounded-xl border flex items-center justify-between transition-colors ${
-        theme === 'dark'
-          ? 'bg-gradient-to-r from-indigo-950/60 to-purple-950/40 border-indigo-500/30'
-          : 'bg-indigo-50/80 border-indigo-200 shadow-xs'
-      }`}>
-        <div className="flex items-start gap-3">
-          <div className="w-9 h-9 rounded-lg bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-indigo-500 shrink-0 mt-0.5">
-            <Sparkles className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-xs font-bold flex items-center gap-2">
-              <span className="text-slate-900 dark:text-slate-100">Результат последней проверки</span>
-              {!neverRun && (
-                <span className={`text-[9px] px-1.5 py-0.5 rounded border font-bold ${
-                  failCount === 0
-                    ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border-emerald-500/30'
-                    : okCount === 0
-                    ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300 border-rose-500/30'
-                    : 'bg-amber-500/20 text-amber-600 dark:text-amber-300 border-amber-500/30'
-                }`}>
-                  {okCount} ИЗ {okCount + failCount}
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5">
-              {isDiagnosticsRunning ? (
-                <>Идёт проверка целей — подождите, результат появится ниже.</>
-              ) : neverRun ? (
-                <>Тест ещё не запускался. Нажмите «Запустить полный тест» — проверка
-                пройдёт по каждой цели пошагово и покажет, на каком именно шаге рвётся
-                соединение.</>
-              ) : failCount === 0 ? (
-                <>Отвечают все проверенные цели: <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>. Обход справляется.</>
-              ) : okCount === 0 ? (
-                proxyOn ? (
-                  <>Не ответила ни одна цель из {failCount}, но по этому нельзя судить об
-                  обходе{bypassOn ? ' (он включён)' : ''}. Включён системный прокси:
-                  браузер ходит через него, а проверка — напрямую, мимо него и через ядро.
-                  Поэтому сайты могут открываться, пока проверка их не видит. Чтобы
-                  результат что-то значил, прокси нужно временно выключить.</>
-                ) : bypassOn ? (
-                  <>Обход включён, но не ответила ни одна цель из {failCount}. Разверните
-                  любую из них: если рукопожатие с посторонним именем проходит, а с
-                  настоящим нет — рвут по имени сайта, и стоит подобрать другую стратегию
-                  в «Пресетах». Загляните и в «Проверку окружения» на главной.</>
-                ) : (
-                  <>Обход выключен, и ни одна цель из {failCount} не отвечает. Включите
-                  его на главной и повторите проверку — иначе сравнивать не с чем.</>
-                )
-              ) : (
-                <>Отвечают <strong className="text-emerald-600 dark:text-emerald-300">{okCount}</strong>,
-                не отвечают <strong className="text-rose-600 dark:text-rose-300">{failCount}</strong>.
-                Разверните неудачную цель — видно, на каком шаге обрыв.</>
-              )}
-            </p>
-          </div>
-        </div>
-
-        <button
-          onClick={() => setActiveTab('presets')}
-          className="flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-semibold transition-colors shrink-0 ml-4"
-        >
-          <span>К пресетам</span>
-          <ArrowRight className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
-      {/* Target Items Accordion List */}
-      <div className="space-y-3">
-        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-          {neverRun
-            ? 'Цели проверки — результатов пока нет'
-            : 'Результаты ступенчатого тестирования (GoodCheck Inspector)'}
-        </span>
-
-        <div className="space-y-3">
-          {diagnostics.map((item) => {
-            const isExpanded = expandedId === item.id;
-
-            return (
+      <div className="space-y-2.5">
+        {diagnostics.map(item => {
+          const isExpanded = expandedId === item.id;
+          const failed = item.status === 'blocked' || item.status === 'error';
+          return (
+            <Card key={item.id} tone={failed ? 'bad' : 'default'} className="overflow-hidden">
               <div
-                key={item.id}
-                className={`rounded-2xl border transition-all overflow-hidden ${
-                  theme === 'dark'
-                    ? 'bg-slate-900/60 border-white/10'
-                    : 'bg-white border-slate-200 shadow-xs'
-                }`}
+                onClick={() => setExpandedId(isExpanded ? '' : item.id)}
+                className="p-3.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-white/[0.02]"
               >
-                {/* Accordion Header */}
-                <div
-                  onClick={() => setExpandedId(isExpanded ? '' : item.id)}
-                  className="p-4 flex items-center justify-between cursor-pointer hover:bg-black/5 dark:hover:bg-white/[0.02] transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 shrink-0">
-                      <Server className="w-4 h-4" />
-                    </div>
-
-                    <div>
-                      <div className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                        <span>{item.name}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/5 dark:bg-white/5 font-mono text-slate-500 dark:text-slate-400">
-                          {item.target}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
-                        IP: {item.ipAddress || 'Определяется...'} • 4 контрольных этапа проверки
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    {/* Status badge */}
-                    {item.status === 'testing' && (
-                      <span className="flex items-center gap-1 text-[11px] text-amber-500 font-medium">
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Тест...
-                      </span>
-                    )}
-
-                    {item.status === 'success' && (
-                      <div className="text-right">
-                        <span className="flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-bold justify-end">
-                          <CheckCircle className="w-3.5 h-3.5" />
-                          Все тесты пройдены
-                        </span>
-                        {item.latencyMs && (
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {item.latencyMs} мс
-                          </span>
-                        )}
-                      </div>
-                    )}
-
-                    {item.status === 'idle' && (
-                      <span className="text-[10px] text-slate-500 px-2 py-1 rounded bg-black/5 dark:bg-white/5">
-                        Нажмите для просмотра
-                      </span>
-                    )}
-
-                    <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${
-                      isExpanded ? 'rotate-180 text-indigo-500' : ''
-                    }`} />
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {item.status === 'testing'
+                    ? <Loader2 className="w-3.5 h-3.5 text-amber-500 animate-spin shrink-0" />
+                    : <StatusDot status={item.status === 'success' ? 'ok' : failed ? 'bad' : 'neutral'} size={8} />}
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold text-t1 truncate">{item.name}</div>
+                    <div className="text-[11px] font-mono text-t3 truncate">{item.target}{item.ipAddress ? ` · ${item.ipAddress}` : ''}</div>
                   </div>
                 </div>
-
-                {/* Expanded Step-by-Step Breakdown (The Exact GoodCheck Format) */}
-                {isExpanded && (
-                  <div className="px-4 pb-4 pt-1 border-t border-black/5 dark:border-white/5 space-y-3 bg-black/[0.02] dark:bg-black/20">
-                    <div className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                      Что проверялось:
-                    </div>
-
-                    <div className="space-y-2.5">
-                      {item.steps.map((step, idx) => (
-                        <div
-                          key={idx}
-                          className={`p-3 rounded-xl border transition-colors ${
-                            step.status === 'success'
-                              ? theme === 'dark' ? 'bg-slate-900/80 border-emerald-500/30' : 'bg-emerald-50/50 border-emerald-200'
-                              : step.status === 'testing'
-                              ? 'bg-amber-500/10 border-amber-500/30'
-                              : theme === 'dark' ? 'bg-black/40 border-white/5' : 'bg-white border-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              {step.status === 'success' ? (
-                                <div className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-500 flex items-center justify-center shrink-0">
-                                  <Check className="w-3 h-3 stroke-[3]" />
-                                </div>
-                              ) : step.status === 'testing' ? (
-                                <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
-                              ) : (
-                                <div className="w-5 h-5 rounded-full bg-black/5 dark:bg-white/10 text-slate-400 flex items-center justify-center shrink-0 text-[10px]">
-                                  {idx + 1}
-                                </div>
-                              )}
-
-                              <div className="font-semibold text-xs text-slate-900 dark:text-slate-100">
-                                {step.title}
-                              </div>
-                            </div>
-
-                            {step.latencyMs && (
-                              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
-                                {step.latencyMs} мс
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="pl-7 mt-1 text-[11px] font-mono text-slate-600 dark:text-slate-300">
-                            {step.detail}
-                          </div>
-
-                          {/* Control Step Explanation Callout */}
-                          {step.isControlStep && step.controlExplanation && (
-                            <div className="mt-2.5 ml-7 p-2 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-start gap-2 text-[10px] text-indigo-700 dark:text-indigo-300">
-                              <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                              <span>{step.controlExplanation}</span>
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {item.steps.map((s, idx) => (
+                    <React.Fragment key={idx}>
+                      <span className={`px-2 py-1 rounded-[7px] font-mono text-[11px] border ${chipTone(s.status)}`} title={`${s.title}: ${s.detail}`}>
+                        {SHORT[idx] || `Шаг ${idx + 1}`}
+                        {s.status === 'success' && s.latencyMs ? ` · ${s.latencyMs} мс` : ''}
+                        {s.status === 'blocked' || s.status === 'error' ? ' · ✗' : ''}
+                      </span>
+                      {idx < item.steps.length - 1 && <span className="text-t3 text-[11px]">→</span>}
+                    </React.Fragment>
+                  ))}
+                  {isExpanded ? <ChevronUp className="w-4 h-4 text-t3 ml-1" /> : <ChevronDown className="w-4 h-4 text-t3 ml-1" />}
+                </div>
               </div>
-            );
-          })}
-        </div>
+
+              {isExpanded && (
+                <div className="px-3.5 pb-3.5 pt-1 space-y-1.5 border-t border-line">
+                  {item.steps.map((step, idx) => (
+                    <div key={idx} className={`px-3 py-2 rounded-[8px] border ${
+                      step.status === 'success' ? 'bg-green-500/[0.05] border-green-500/20'
+                        : step.status === 'blocked' || step.status === 'error' ? 'bg-red-500/[0.06] border-red-500/20'
+                        : step.status === 'testing' ? 'bg-amber-500/10 border-amber-500/25'
+                        : 'bg-s2 border-line'
+                    }`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {step.status === 'success'
+                            ? <span className="w-4 h-4 rounded-full bg-green-500/20 text-green-400 flex items-center justify-center shrink-0"><Check className="w-2.5 h-2.5" /></span>
+                            : step.status === 'testing'
+                              ? <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
+                              : <span className="w-4 h-4 rounded-full bg-white/[0.06] text-t3 flex items-center justify-center shrink-0 text-[10px]">{idx + 1}</span>}
+                          <span className="text-[12px] font-medium text-t1 truncate">{step.title}</span>
+                        </div>
+                        {step.latencyMs ? <span className="text-[11px] font-mono text-t2 shrink-0">{step.latencyMs} мс</span> : null}
+                      </div>
+                      <div className="pl-6 mt-0.5 text-[11px] font-mono text-t2 break-all">{step.detail}</div>
+                      {step.isControlStep && step.controlExplanation && (
+                        <div className="mt-1.5 ml-6 px-2 py-1.5 rounded-[7px] bg-ac/10 border border-ac/25 flex items-start gap-2 text-[11px] text-t1">
+                          <Info className="w-3.5 h-3.5 shrink-0 mt-0.5 text-ac-300" />
+                          <span>{step.controlExplanation}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          );
+        })}
       </div>
+
+      <Card className="p-3.5 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-t1">
+            {neverRun ? 'Результатов пока нет' : isDiagnosticsRunning ? 'Идёт проверка…' : `Итог: отвечают ${okCount} из ${okCount + failCount} целей`}
+          </div>
+          <div className="text-[12px] text-t2 leading-relaxed">{summary}</div>
+        </div>
+        <Button variant="secondary" size="sm" onClick={() => setActiveTab('autotune')}>
+          К подбору <ArrowRight className="w-3.5 h-3.5" />
+        </Button>
+      </Card>
     </div>
   );
 };

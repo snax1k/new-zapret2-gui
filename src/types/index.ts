@@ -1,6 +1,6 @@
 export type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
-export type TabType = 'dashboard' | 'presets' | 'hostlists' | 'tgproxy' | 'diagnostics' | 'logs' | 'settings';
+export type TabType = 'dashboard' | 'autotune' | 'presets' | 'hostlists' | 'tgproxy' | 'diagnostics' | 'logs' | 'settings';
 
 export type EngineMode = 'windivert' | 'nfqws' | 'tpws';
 

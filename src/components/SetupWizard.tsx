@@ -216,7 +216,7 @@ const WelcomeStep: React.FC = () => {
       {customPreset && recommended && (
         <Callout tone="warn" title={`Сейчас выбран ваш пресет «${activePreset.name}»`}>
           Мастер настраивает встроенный пресет «{recommended.name}» и переключит на него.
-          Ваш пресет никуда не денется — он останется в разделе «Пресеты».
+          Ваш пресет никуда не денется — он останется в разделе «Подбор» → «Стратегии».
         </Callout>
       )}
     </div>
@@ -501,7 +501,7 @@ const TuneStep: React.FC<{
     const t = setTimeout(() => {
       if (!sawRunning.current) {
         setPhase('intro');
-        setStartError('Проверка не запустилась. Попробуйте ещё раз; если повторится — загляните в «Консоль логов».');
+        setStartError('Проверка не запустилась. Попробуйте ещё раз; если повторится — загляните в «Журнал».');
       }
     }, 5000);
     return () => clearTimeout(t);
@@ -775,7 +775,7 @@ const TelegramStep: React.FC<{ enabled: boolean; onEnable: () => void }> = ({ en
             <div className="p-4 rounded-2xl border border-slate-200 dark:border-white/10 space-y-1.5">
               <div className="text-[13px] font-bold text-slate-900 dark:text-slate-100">Telegram работает нормально</div>
               <p className="text-[12px] leading-relaxed text-slate-500 dark:text-slate-400">
-                Мост не нужен — пропустите шаг. Включить его можно в любой момент в разделе «Телеграм — Прокси».
+                Мост не нужен — пропустите шаг. Включить его можно в любой момент в разделе «Telegram».
               </p>
             </div>
           </div>
@@ -940,10 +940,10 @@ const FinishStep: React.FC<{
         <div className="grid grid-cols-2 gap-2">
           {[
             { icon: Power, t: 'Главная', d: 'большая кнопка — включить и выключить обход' },
-            { icon: Wand2, t: 'Главная → «Подобрать стратегию»', d: 'если что-то перестало открываться' },
+            { icon: Wand2, t: 'Подбор', d: 'если что-то перестало открываться — «Собрать пресет»' },
             { icon: Activity, t: 'Диагностика', d: 'проверить, что открывается прямо сейчас' },
-            { icon: Terminal, t: 'Консоль логов', d: 'журнал для разработчика, если что-то сломалось' },
-            { icon: Send, t: 'Телеграм — Прокси', d: 'мост, ссылка для телефона, счётчики' },
+            { icon: Terminal, t: 'Журнал', d: 'для разработчика, если что-то сломалось' },
+            { icon: Send, t: 'Telegram', d: 'мост, ссылка для телефона, счётчики' },
             { icon: Settings, t: 'Настройки', d: 'тема, кэш Discord и этот мастер снова' }
           ].map(x => {
             const Icon = x.icon;

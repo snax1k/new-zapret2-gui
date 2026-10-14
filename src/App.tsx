@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { UpdateModal } from './components/UpdateModal';
 import { CreatePresetModal } from './components/CreatePresetModal';
-import { AutotuneModal } from './components/AutotuneModal';
 import { SetupWizard } from './components/SetupWizard';
 import { DashboardView } from './views/DashboardView';
+import { AutotuneView } from './views/AutotuneView';
 import { PresetsView } from './views/PresetsView';
 import { HostlistsView } from './views/HostlistsView';
 import { TgProxyView } from './views/TgProxyView';
@@ -15,89 +15,69 @@ import { SettingsView } from './views/SettingsView';
 import { useApp } from './context/AppContext';
 import { BellRing, X } from 'lucide-react';
 
+/** Ширина окна, при которой меню сворачивается до иконок. */
+const COMPACT_BELOW = 900;
+
+const useCompact = () => {
+  const [compact, setCompact] = useState(() => window.innerWidth < COMPACT_BELOW);
+  useEffect(() => {
+    const onResize = () => setCompact(window.innerWidth < COMPACT_BELOW);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return compact;
+};
+
 export const App: React.FC = () => {
-  const { activeTab, theme, showTrayToast, setShowTrayToast, status } = useApp();
+  const { activeTab, showTrayToast, setShowTrayToast, status } = useApp();
+  const compact = useCompact();
 
   const renderActiveView = () => {
     switch (activeTab) {
-      case 'dashboard':
-        return <DashboardView />;
-      case 'presets':
-        return <PresetsView />;
-      case 'hostlists':
-        return <HostlistsView />;
-      case 'tgproxy':
-        return <TgProxyView />;
-      case 'diagnostics':
-        return <DiagnosticsView />;
-      case 'logs':
-        return <LogsView />;
-      case 'settings':
-        return <SettingsView />;
-      default:
-        return <DashboardView />;
+      case 'dashboard': return <DashboardView compact={compact} />;
+      case 'autotune': return <AutotuneView />;
+      case 'presets': return <PresetsView />;
+      case 'hostlists': return <HostlistsView />;
+      case 'tgproxy': return <TgProxyView />;
+      case 'diagnostics': return <DiagnosticsView />;
+      case 'logs': return <LogsView />;
+      case 'settings': return <SettingsView />;
+      default: return <DashboardView compact={compact} />;
     }
   };
 
   return (
-    <div className={`app-shell h-screen w-screen flex flex-col select-none overflow-hidden transition-colors duration-200 ${
-      theme === 'dark'
-        ? 'bg-slate-950 text-slate-100'
-        : 'bg-slate-100 text-slate-900'
-    }`}>
-      {/* Windows 11 Styled Title Bar */}
+    <div className="app-shell h-screen w-screen flex flex-col select-none overflow-hidden bg-app text-t1">
       <TitleBar />
 
-      {/* Main App Body */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Sidebar Navigation */}
-        <Sidebar />
+      <div className="flex-1 flex min-h-0 relative">
+        <Sidebar compact={compact} />
 
-        {/* Dynamic Content Area */}
-        <main className={`flex-1 overflow-hidden relative transition-colors duration-200 ${
-          theme === 'dark' ? 'bg-slate-900/75' : 'bg-slate-50/70'
-        }`}>
-          {/* Subtle Ambient Background Gradients */}
-          <div className="absolute top-0 right-1/4 w-96 h-96 bg-indigo-600/5 rounded-full blur-3xl pointer-events-none" />
-          <div className="absolute bottom-0 right-0 w-80 h-80 bg-emerald-600/5 rounded-full blur-3xl pointer-events-none" />
-
-          {/* Current Screen View */}
-          <div className="relative z-10 h-full">
+        <main className="flex-1 min-w-0 overflow-hidden relative">
+          {/* key: при смене экрана содержимое мягко появляется заново. */}
+          <div key={activeTab} className="h-full animate-fadeIn">
             {renderActiveView()}
           </div>
         </main>
       </div>
 
-      {/* Auto-Update Modal */}
       <UpdateModal />
-
-      {/* Create Custom Preset Modal */}
       <CreatePresetModal />
-
-      {/* Автоподбор стратегии — открывается и с главной, и из «Пресетов» */}
-      <AutotuneModal />
-
-      {/* Мастер первого запуска — сам при первом запуске, потом из «Настроек» */}
+      {/* Мастер первого запуска — сам при первом запуске, потом из «Настроек». */}
       <SetupWizard />
 
-      {/* Tray Toast Notification */}
       {showTrayToast && (
-        <div className="fixed bottom-4 right-4 z-50 p-3.5 rounded-2xl bg-indigo-950/90 text-white border border-indigo-500/40 shadow-2xl backdrop-blur-md flex items-center gap-3 animate-fadeIn">
-          <div className="w-8 h-8 rounded-xl bg-indigo-600/30 border border-indigo-400/30 flex items-center justify-center text-indigo-400 shrink-0">
-            <BellRing className="w-4 h-4" />
-          </div>
+        <div className="fixed bottom-4 right-4 z-50 px-3.5 py-2.5 rounded-[10px] bg-s3 border border-ac/40 shadow-lg flex items-center gap-3 animate-fadeIn">
+          <BellRing className="w-4 h-4 text-ac shrink-0" />
           <div>
-            <div className="text-xs font-bold">Приложение свернуто в трей</div>
-            <div className="text-[10px] text-slate-300">
+            <div className="text-[12px] font-semibold text-white">Программа свёрнута в трей</div>
+            <div className="text-[11px] text-t2">
               {status === 'connected'
-                ? 'Обход продолжает работать в фоне. Иконка в области уведомлений.'
-                : 'Иконка в области уведомлений. Обход сейчас выключен.'}
+                ? 'Обход продолжает работать в фоне. Значок — в области уведомлений.'
+                : 'Значок — в области уведомлений. Обход сейчас выключен.'}
             </div>
           </div>
-          <button
-            onClick={() => setShowTrayToast(false)}
-            className="p-1 rounded text-slate-400 hover:text-white"
-          >
+          <button onClick={() => setShowTrayToast(false)} className="p-1 rounded text-t3 hover:text-t1">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>

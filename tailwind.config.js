@@ -1,4 +1,8 @@
 /** @type {import('tailwindcss').Config} */
+const ramp = (prefix) => Object.fromEntries(
+  [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map(s => [s, `rgb(var(--${prefix}-${s}) / <alpha-value>)`])
+);
+
 export default {
   content: [
     "./index.html",
@@ -8,63 +12,42 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Акцент и поверхности берутся из CSS-переменных, которые ставит
-        // src/lib/theme.ts. Интерфейс написан обычными классами Tailwind
-        // (indigo-* и slate-*), их почти девятьсот — подменять палитру целиком
-        // дешевле и надёжнее, чем править каждый класс. Формат «R G B» без
-        // rgb() нужен для модификатора прозрачности: bg-indigo-600/20.
-        indigo: {
-          50: 'rgb(var(--accent-50) / <alpha-value>)',
-          100: 'rgb(var(--accent-100) / <alpha-value>)',
-          200: 'rgb(var(--accent-200) / <alpha-value>)',
-          300: 'rgb(var(--accent-300) / <alpha-value>)',
-          400: 'rgb(var(--accent-400) / <alpha-value>)',
-          500: 'rgb(var(--accent-500) / <alpha-value>)',
-          600: 'rgb(var(--accent-600) / <alpha-value>)',
-          700: 'rgb(var(--accent-700) / <alpha-value>)',
-          800: 'rgb(var(--accent-800) / <alpha-value>)',
-          900: 'rgb(var(--accent-900) / <alpha-value>)',
-          950: 'rgb(var(--accent-950) / <alpha-value>)',
+        // Палитры из CSS-переменных — их ставит src/lib/theme.ts.
+        //
+        // indigo и slate — для старых компонентов: их почти девятьсот
+        // классов, подменить палитру дешевле, чем править каждый. Формат
+        // «R G B» без rgb() нужен для модификатора прозрачности: bg-indigo-600/20.
+        indigo: ramp('accent'),
+        slate: ramp('surface'),
+
+        // Токены редизайна 0.4.3 — новые компоненты пишутся ими.
+        app: 'rgb(var(--c-bg) / <alpha-value>)',
+        s1: 'rgb(var(--c-s1) / <alpha-value>)',
+        s2: 'rgb(var(--c-s2) / <alpha-value>)',
+        s3: 'rgb(var(--c-s3) / <alpha-value>)',
+        t1: '#EDEDEF',
+        t2: '#A1A1AA',
+        t3: '#6B6B76',
+        ac: {
+          DEFAULT: 'rgb(var(--accent-500) / <alpha-value>)',
+          ...ramp('accent'),
         },
-        slate: {
-          50: 'rgb(var(--surface-50) / <alpha-value>)',
-          100: 'rgb(var(--surface-100) / <alpha-value>)',
-          200: 'rgb(var(--surface-200) / <alpha-value>)',
-          300: 'rgb(var(--surface-300) / <alpha-value>)',
-          400: 'rgb(var(--surface-400) / <alpha-value>)',
-          500: 'rgb(var(--surface-500) / <alpha-value>)',
-          600: 'rgb(var(--surface-600) / <alpha-value>)',
-          700: 'rgb(var(--surface-700) / <alpha-value>)',
-          800: 'rgb(var(--surface-800) / <alpha-value>)',
-          900: 'rgb(var(--surface-900) / <alpha-value>)',
-          950: 'rgb(var(--surface-950) / <alpha-value>)',
-        },
-        background: {
-          DEFAULT: '#0B0F19',
-          card: '#111827',
-          surface: '#1E293B',
-          glass: 'rgba(15, 23, 42, 0.75)',
-        },
-        primary: {
-          50: '#eef2ff',
-          100: '#e0e7ff',
-          400: '#818cf8',
-          500: '#6366f1',
-          600: '#4f46e5',
-          700: '#4338ca',
-        },
-        accent: {
-          green: '#10B981',
-          cyan: '#06B6D4',
-          amber: '#F59E0B',
-          rose: '#F43F5E',
-          purple: '#A855F7',
-        }
+      },
+      borderColor: {
+        line: 'rgb(255 255 255 / var(--c-line))',
+        'line-strong': 'rgb(255 255 255 / var(--c-line-strong))',
+      },
+      fontFamily: {
+        // Приложение работает офлайн — шрифты системные: Segoe UI Variable
+        // на Windows 11, Segoe UI на Windows 10. Моноширинный — Cascadia
+        // (Windows Terminal), иначе Consolas.
+        sans: ['"Segoe UI Variable Text"', '"Segoe UI Variable"', '"Segoe UI"', 'system-ui', 'sans-serif'],
+        mono: ['"Cascadia Mono"', '"Cascadia Code"', 'Consolas', '"JetBrains Mono"', 'monospace'],
       },
       boxShadow: {
-        'glow-green': '0 0 35px -5px rgba(16, 185, 129, 0.45)',
-        'glow-indigo': '0 0 35px -5px rgba(99, 102, 241, 0.45)',
-        'glow-red': '0 0 35px -5px rgba(244, 63, 94, 0.35)',
+        'glow-green': '0 0 35px -5px rgba(34, 197, 94, 0.45)',
+        'glow-indigo': '0 0 35px -5px rgb(var(--accent-500) / 0.45)',
+        'glow-red': '0 0 35px -5px rgba(239, 68, 68, 0.35)',
         'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
       },
       backdropBlur: {

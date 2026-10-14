@@ -1,10 +1,40 @@
 import React, { useState, useMemo, useRef } from 'react';
-import { Terminal, Trash2, Copy, Pause, Play, Filter, FolderOpen, Search, X } from 'lucide-react';
+import { Trash2, Copy, Pause, Play, FolderOpen, Search, X, Check } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { LogEntry } from '../types';
+import { Button } from '../components/ui';
+
+/** Человеческие имена источников. Фильтр работает по исходным. */
+const SOURCE_LABEL: Record<string, string> = {
+  WinWS: 'Ядро',
+  Core: 'Программа',
+  Runner: 'Запуск',
+  Autotune: 'Подбор',
+  TgProxy: 'Telegram',
+  Proxy: 'Прокси',
+  Preflight: 'Проверка',
+  Presets: 'Пресеты',
+  Settings: 'Настройки',
+  Theme: 'Оформление',
+  Tray: 'Трей',
+  Diagnostics: 'Диагностика',
+  Updater: 'Обновления',
+  Setup: 'Установка',
+  Logger: 'Журнал',
+  Hostlist: 'Списки'
+};
+const srcLabel = (s: string) => SOURCE_LABEL[s] || s;
+
+const LEVEL: Record<LogEntry['level'], { label: string; badge: string; text: string }> = {
+  info: { label: 'инфо', badge: 'bg-blue-500/[0.12] text-blue-300', text: 'text-t1' },
+  success: { label: 'успех', badge: 'bg-green-500/[0.12] text-green-300', text: 'text-green-300' },
+  warn: { label: 'предупр', badge: 'bg-amber-500/[0.12] text-amber-300', text: 'text-amber-200' },
+  error: { label: 'ошибка', badge: 'bg-red-500/[0.12] text-red-300', text: 'text-red-300' },
+  packet: { label: 'пакет', badge: 'bg-cyan-500/[0.12] text-cyan-300', text: 'text-cyan-200' }
+};
 
 export const LogsView: React.FC = () => {
-  const { logs, clearLogs, openLogsFolder, theme } = useApp();
+  const { logs, clearLogs, openLogsFolder } = useApp();
   const [filterLevel, setFilterLevel] = useState<string>('all');
   const [filterSource, setFilterSource] = useState<string>('all');
   const [query, setQuery] = useState('');
@@ -12,15 +42,12 @@ export const LogsView: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   // На паузе список замораживается на том, что было в момент нажатия.
-  // Раньше кнопка «Пауза» ничего не делала — состояние заводили, но нигде
-  // не использовали, и лог продолжал бежать.
   const frozen = useRef<LogEntry[] | null>(null);
   if (isPaused && frozen.current === null) frozen.current = logs;
   if (!isPaused && frozen.current !== null) frozen.current = null;
   const source = isPaused && frozen.current ? frozen.current : logs;
 
-  // Источники берём из самого лога: набор зависит от того, что происходило
-  // (Autotune появляется только после подбора, Proxy — только при прокси).
+  // Источники берём из самого журнала: набор зависит от того, что происходило.
   const sources = useMemo(() => {
     const set = new Set<string>();
     logs.forEach(l => set.add(l.source || 'Core'));
@@ -38,8 +65,7 @@ export const LogsView: React.FC = () => {
   }, [source, filterLevel, filterSource, query]);
 
   const copyAll = () => {
-    // Копируется то, что видно на экране: обычно нужен именно отфильтрованный
-    // кусок, ради которого фильтр и ставили.
+    // Копируется то, что видно: обычно нужен именно отфильтрованный кусок.
     const text = filteredLogs
       .map(l => `[${l.timestamp}] [${l.source || 'Core'}] [${l.level.toUpperCase()}]: ${l.message}`)
       .join('\n');
@@ -48,162 +74,71 @@ export const LogsView: React.FC = () => {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const getLevelColor = (level: LogEntry['level']) => {
-    switch (level) {
-      case 'success': return 'text-emerald-400';
-      case 'error': return 'text-rose-400 font-bold';
-      case 'warn': return 'text-amber-400';
-      case 'packet': return 'text-cyan-400';
-      default: return 'text-slate-300';
-    }
-  };
-
   return (
-    <div className="h-full flex flex-col p-6 space-y-4 overflow-hidden select-none">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold flex items-center gap-2">
-            <Terminal className="w-5 h-5 text-indigo-500" />
-            Консоль логов ядра (Live Console)
-          </h2>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Вывод событий десинхронизации, WinDivert и системных сообщений
-          </p>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsPaused(!isPaused)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-              isPaused
-                ? 'bg-amber-500/20 text-amber-600 dark:text-amber-300 border-amber-500/30'
-                : 'bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 border-black/5 dark:border-white/5'
-            }`}
-          >
-            {isPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-            <span>{isPaused ? 'Возобновить' : 'Пауза'}</span>
-          </button>
-
-          <button
-            onClick={copyAll}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 text-xs font-medium border border-black/5 dark:border-white/5 transition-colors"
-          >
-            <Copy className="w-3.5 h-3.5" />
-            <span>{copied ? 'Скопировано' : 'Копировать'}</span>
-          </button>
-
-          <button
-            onClick={openLogsFolder}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 text-xs font-medium border border-black/5 dark:border-white/5 transition-colors whitespace-nowrap"
-            title="Полный лог пишется в файл с ротацией и упаковкой в zip"
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>Папка логов</span>
-          </button>
-
-          <button
-            onClick={clearLogs}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-rose-500/20 text-slate-600 dark:text-slate-400 hover:text-rose-600 dark:hover:text-rose-300 text-xs font-medium border border-black/5 dark:border-white/5 transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>Очистить</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Фильтры и поиск */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs flex-wrap">
-          <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-          {['all', 'info', 'success', 'warn', 'error'].map((lvl) => (
-            <button
-              key={lvl}
-              onClick={() => setFilterLevel(lvl)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-                filterLevel === lvl
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              {lvl.toUpperCase()}
-            </button>
-          ))}
-
-          <span className="w-px h-4 bg-black/10 dark:bg-white/10 mx-1" />
-
-          <button
-            onClick={() => setFilterSource('all')}
-            className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-              filterSource === 'all'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-            }`}
-          >
-            ВСЕ ИСТОЧНИКИ
-          </button>
-          {sources.map(src => (
-            <button
-              key={src}
-              onClick={() => setFilterSource(src)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-                filterSource === src
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'bg-black/5 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-              }`}
-            >
-              {src}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className={`flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border ${
-            theme === 'dark' ? 'bg-slate-900/50 border-white/10' : 'bg-white border-slate-200'
-          }`}>
-            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+    <div className="h-full flex flex-col p-5 gap-3 overflow-hidden select-none">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={filterLevel} onChange={(e) => setFilterLevel(e.target.value)} className="ui-input px-2.5 py-1.5 text-[12px]">
+            <option value="all">Все уровни</option>
+            <option value="info">Инфо</option>
+            <option value="success">Успех</option>
+            <option value="warn">Предупреждение</option>
+            <option value="error">Ошибка</option>
+          </select>
+          <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="ui-input px-2.5 py-1.5 text-[12px]">
+            <option value="all">Все источники</option>
+            {sources.map(s => <option key={s} value={s}>{srcLabel(s)}</option>)}
+          </select>
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-t3" />
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Поиск по тексту: имя хоста, IP, название опции..."
-              className="flex-1 bg-transparent outline-none text-xs text-slate-800 dark:text-slate-200 placeholder:text-slate-500"
+              placeholder="Поиск: хост, IP, опция…"
+              className="ui-input pl-8 pr-7 py-1.5 text-[12px] w-52"
             />
             {query && (
-              <button onClick={() => setQuery('')} className="text-slate-400 hover:text-slate-200 shrink-0">
+              <button type="button" onClick={() => setQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-t3 hover:text-t1">
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
+        </div>
 
-          <span className="text-[11px] text-slate-500 dark:text-slate-400 font-mono whitespace-nowrap">
-            {filteredLogs.length} из {source.length}
-            {isPaused && <span className="text-amber-500"> · пауза</span>}
-          </span>
+        <div className="flex items-center gap-1.5">
+          <Button variant={isPaused ? 'success' : 'secondary'} size="sm" icon={isPaused ? Play : Pause} onClick={() => setIsPaused(!isPaused)}>
+            {isPaused ? 'Продолжить' : 'Пауза'}
+          </Button>
+          <Button variant="secondary" size="sm" icon={copied ? Check : Copy} onClick={copyAll}>{copied ? 'Скопировано' : 'Копировать'}</Button>
+          <Button variant="secondary" size="sm" icon={Trash2} onClick={clearLogs}>Очистить</Button>
+          <Button variant="secondary" size="sm" icon={FolderOpen} onClick={openLogsFolder} title="Полный журнал пишется в файл с ротацией и упаковкой в zip">
+            Папка журналов
+          </Button>
         </div>
       </div>
 
-      {/* Terminal Output Area */}
-      <div className="flex-1 rounded-xl bg-black/90 dark:bg-black/80 border border-slate-700 dark:border-white/10 p-4 font-mono text-[11px] overflow-y-auto space-y-1.5 shadow-inner">
+      <div className="flex-1 min-h-0 rounded-[12px] p-2.5 font-mono text-[11px] overflow-y-auto space-y-0.5 bg-s1 border border-line select-text">
         {filteredLogs.length === 0 ? (
-          <div className="text-slate-600 text-center py-12">
-            {source.length === 0
-              ? 'Журнал логов пуст'
-              : 'Под фильтры ничего не подошло — ослабьте условия'}
+          <div className="text-t3 text-center py-12 font-sans text-[12px]">
+            {source.length === 0 ? 'Журнал пуст' : 'Под фильтры ничего не подошло — ослабьте условия'}
           </div>
         ) : (
-          filteredLogs.map((log) => (
-            <div key={log.id} className="flex items-start gap-2.5 leading-relaxed hover:bg-white/[0.04] px-1 rounded">
-              <span className="text-slate-500 shrink-0 select-none">[{log.timestamp}]</span>
-              <span className="text-indigo-400 shrink-0 font-semibold select-none">[{log.source || 'Zapret'}]</span>
-              <span className={`shrink-0 text-[10px] px-1 py-0.2 rounded bg-white/10 font-bold uppercase select-none ${getLevelColor(log.level)}`}>
-                {log.level}
-              </span>
-              <span className={`break-all ${getLevelColor(log.level)}`}>
-                {log.message}
-              </span>
-            </div>
-          ))
+          filteredLogs.map(log => {
+            const lv = LEVEL[log.level] || LEVEL.info;
+            return (
+              <div key={log.id} className="flex items-start gap-2 py-1 px-2 rounded hover:bg-white/[0.02] leading-relaxed">
+                <span className="text-t3 shrink-0 select-none">{log.timestamp}</span>
+                <span className={`px-1.5 rounded text-[10px] shrink-0 select-none ${lv.badge}`}>{lv.label}</span>
+                <span className="px-1.5 rounded text-[10px] shrink-0 select-none bg-s2 text-t2">{srcLabel(log.source || 'Core')}</span>
+                <span className={`break-all ${lv.text}`}>{log.message}</span>
+              </div>
+            );
+          })
         )}
+      </div>
+
+      <div className="text-[11px] text-t3 font-mono">
+        {filteredLogs.length} из {source.length}{isPaused && <span className="text-amber-400"> · пауза</span>}
       </div>
     </div>
   );

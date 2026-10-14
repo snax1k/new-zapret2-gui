@@ -1,27 +1,26 @@
 import React, { useState } from 'react';
-import { ShieldCheck, AlertTriangle, XCircle, ChevronDown, RefreshCw } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, XCircle, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { loadSetting, saveSetting } from '../lib/settings';
+import { Button } from './ui';
 
 /**
- * Предполётная проверка окружения.
+ * Предполётная проверка окружения — карточка «Проверка компьютера».
  *
  * Отвечает на вопрос «почему обход может ничего не сделать» ДО того, как
- * пользователь потратит день на перебор стратегий. Каждая проверка взята из
+ * человек потратит день на перебор стратегий. Каждая проверка взята из
  * реального случая: системный прокси уводит HTTP(S) в loopback мимо winws,
  * VPN-адаптер уводит трафик мимо DPI провайдера, посторонний winws.exe или
- * другой обходчик дерётся за драйвер WinDivert.
+ * другой обходчик дерётся за драйвер WinDivert, Discord ходит через прокси.
  *
  * Когда всё в порядке — это одна строка, а не список из галочек.
  */
-/** Свёрнута ли панель. Выбор переживает перезапуск: он про привычку. */
+/** Свёрнута ли карточка. Выбор переживает перезапуск: он про привычку. */
 const COLLAPSED_KEY = 'zapret2_preflight_collapsed_v1';
 
 export const PreflightPanel: React.FC = () => {
-  const { preflight, runPreflight, runPreflightAction, theme } = useApp();
-  const [collapsed, setCollapsedState] = useState<boolean>(
-    () => loadSetting(COLLAPSED_KEY) === '1'
-  );
+  const { preflight, runPreflight, runPreflightAction } = useApp();
+  const [collapsed, setCollapsedState] = useState<boolean>(() => loadSetting(COLLAPSED_KEY) === '1');
   const [showAll, setShowAll] = useState(false);
 
   const setCollapsed = (v: boolean) => {
@@ -29,95 +28,91 @@ export const PreflightPanel: React.FC = () => {
     setCollapsedState(v);
   };
 
-  if (preflight.length === 0) return null;
-
   const problems = preflight.filter(p => p.level !== 'ok');
-  const hasError = problems.some(p => p.level === 'error');
-  const allGood = problems.length === 0;
+  const passed = preflight.filter(p => p.level === 'ok');
+  const errors = problems.filter(p => p.level === 'error').length;
+  const hasError = errors > 0;
+  const allGood = preflight.length > 0 && problems.length === 0;
 
-  const tone = allGood
-    ? { border: 'border-emerald-500/30', bg: 'bg-emerald-500/5', text: 'text-emerald-600 dark:text-emerald-400' }
+  const HeadIcon = preflight.length === 0 ? RefreshCw : allGood ? ShieldCheck : hasError ? XCircle : AlertTriangle;
+  const headColor = preflight.length === 0 ? 'text-t3' : allGood ? 'text-green-500' : hasError ? 'text-red-500' : 'text-amber-500';
+  const title = preflight.length === 0 || allGood
+    ? 'Проверка компьютера'
     : hasError
-      ? { border: 'border-rose-500/30', bg: 'bg-rose-500/5', text: 'text-rose-600 dark:text-rose-400' }
-      : { border: 'border-amber-500/30', bg: 'bg-amber-500/5', text: 'text-amber-600 dark:text-amber-400' };
+      ? `Помехи: ${problems.length} — ${errors === 1 ? 'одна из них блокирует' : 'некоторые блокируют'} работу`
+      : `Помехи: ${problems.length} — обход может не сработать`;
 
-  const HeadIcon = allGood ? ShieldCheck : hasError ? XCircle : AlertTriangle;
-
-  const summary = allGood
-    ? 'Окружение в порядке — обходу ничто не мешает'
-    : hasError
-      ? `Помех: ${problems.length} — одна из них блокирует работу`
-      : `Помех: ${problems.length} — обход может не сработать`;
-
-  // Три состояния, а не два. Раньше стрелка переключала «проблемы» и «всё»,
-  // то есть при любом положении предупреждения оставались на экране и кнопка
-  // выглядела сломанной. Теперь она именно сворачивает — до одной строки.
-  const visible = collapsed ? [] : showAll ? preflight : problems;
-  const okCount = preflight.length - problems.length;
+  const visible = collapsed ? [] : showAll ? [...problems, ...passed] : problems;
 
   return (
-    <div className={`rounded-xl border ${tone.border} ${tone.bg} select-none`}>
-      <div className="flex items-center gap-2 px-3 py-2">
-        <HeadIcon className={`w-4 h-4 shrink-0 ${tone.text}`} />
-        <span className={`text-[11px] font-bold flex-1 truncate ${tone.text}`}>{summary}</span>
-
-        <button
-          onClick={runPreflight}
-          title="Проверить заново"
-          className="p-1 rounded-md text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-        </button>
-
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          title={collapsed ? 'Развернуть' : 'Свернуть до одной строки'}
-          className="p-1 rounded-md text-slate-400 hover:text-slate-200 transition-colors"
-        >
-          <ChevronDown className={`w-3.5 h-3.5 transition-transform ${collapsed ? '' : 'rotate-180'}`} />
-        </button>
+    <div className={`rounded-[12px] p-3.5 flex flex-col gap-2.5 bg-s1 border ${
+      hasError ? 'border-red-500/[0.28]' : problems.length > 0 ? 'border-amber-500/[0.28]' : 'border-line'
+    }`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <HeadIcon className={`w-4 h-4 shrink-0 ${headColor}`} />
+          <span className="text-[13px] font-semibold text-t1 truncate">{title}</span>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <Button variant="secondary" size="sm" icon={RefreshCw} onClick={runPreflight}>Проверить снова</Button>
+          {problems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setCollapsed(!collapsed)}
+              title={collapsed ? 'Развернуть' : 'Свернуть до одной строки'}
+              className="p-1.5 rounded-[7px] text-t2 hover:text-t1 hover:bg-white/[0.05]"
+            >
+              {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
+            </button>
+          )}
+        </div>
       </div>
 
-      {visible.length > 0 && (
-        <div className="px-3 pb-2.5 space-y-1.5">
-          {visible.map(item => {
-            const Icon = item.level === 'ok' ? ShieldCheck : item.level === 'error' ? XCircle : AlertTriangle;
-            const color = item.level === 'ok'
-              ? 'text-emerald-500'
-              : item.level === 'error' ? 'text-rose-500' : 'text-amber-500';
+      {preflight.length === 0 && (
+        <div className="px-2.5 py-2 rounded-[8px] bg-s2 border border-line text-[12px] text-t2">
+          Проверяю окружение…
+        </div>
+      )}
 
-            return (
-              <div
-                key={item.id}
-                className={`flex items-start gap-2 p-2 rounded-lg border ${
-                  theme === 'dark' ? 'bg-slate-900/40 border-white/5' : 'bg-white/70 border-slate-200/70'
-                }`}
-              >
-                <Icon className={`w-3.5 h-3.5 mt-0.5 shrink-0 ${color}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[11px] font-semibold text-slate-800 dark:text-slate-200">{item.title}</div>
-                  <div className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">{item.detail}</div>
-                </div>
-                {item.action && item.actionLabel && (
-                  <button
-                    onClick={() => runPreflightAction(item.action!)}
-                    className="shrink-0 self-center text-[10px] font-semibold px-2.5 py-1 rounded-lg bg-indigo-500/20 text-indigo-500 hover:bg-indigo-500/30"
-                  >
-                    {item.actionLabel}
-                  </button>
-                )}
-              </div>
-            );
-          })}
+      {allGood && !showAll && (
+        <div className="px-2.5 py-2 rounded-[8px] bg-s2 border border-line text-[12px] leading-relaxed text-t2">
+          <span className="text-green-400 font-medium">Помех нет:</span>{' '}
+          {passed.map(p => p.title.replace(/\.$/, '')).join(' · ')}.
+        </div>
+      )}
 
-          {okCount > 0 && (
-            <button
-              onClick={() => setShowAll(v => !v)}
-              className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors pt-0.5"
-            >
-              {showAll
-                ? 'Скрыть пройденные проверки'
-                : `Показать пройденные проверки (${okCount})`}
+      {visible.map(item => {
+        const tone = item.level === 'error'
+          ? { box: 'bg-red-500/[0.12] border-red-500/[0.28]', dot: 'bg-red-500', title: 'text-red-300' }
+          : item.level === 'warn'
+            ? { box: 'bg-amber-500/[0.12] border-amber-500/[0.28]', dot: 'bg-amber-500', title: 'text-amber-300' }
+            : { box: 'bg-s2 border-line', dot: 'bg-green-500', title: 'text-t1' };
+        return (
+          <div key={item.id} className={`px-2.5 py-2 rounded-[8px] border flex items-start gap-2.5 ${tone.box}`}>
+            <span className={`w-2 h-2 rounded-full shrink-0 mt-[5px] ${tone.dot}`} />
+            <div className="min-w-0 flex-1">
+              <div className={`text-[12px] font-semibold ${tone.title}`}>{item.title}</div>
+              <div className="text-[11px] leading-snug text-t1/85 mt-0.5">{item.detail}</div>
+            </div>
+            {item.action && item.actionLabel && (
+              <Button variant="secondary" size="sm" onClick={() => runPreflightAction(item.action!)} className="self-center">
+                {item.actionLabel}
+              </Button>
+            )}
+          </div>
+        );
+      })}
+
+      {preflight.length > 0 && (
+        <div className="flex items-center justify-between gap-2 text-[11px] text-t3 pt-1.5 border-t border-line">
+          <span className="truncate">
+            {collapsed && problems.length > 0
+              ? 'Свёрнуто — разверните, чтобы увидеть подробности'
+              : `Пройдено проверок: ${passed.length} из ${preflight.length}`}
+          </span>
+          {passed.length > 0 && !collapsed && (
+            <button type="button" onClick={() => setShowAll(v => !v)} className="text-t2 hover:text-t1 hover:underline shrink-0">
+              {showAll ? 'Скрыть пройденные' : 'Показать все проверки'}
             </button>
           )}
         </div>

@@ -1,81 +1,46 @@
 import React, { useState } from 'react';
-import { Shield, Minus, Square, Copy, X, Cpu, Sun, Moon, Flame, Lock } from 'lucide-react';
+import { Shield, Minus, Square, Copy, X } from 'lucide-react';
 import { useApp, APP_VERSION } from '../context/AppContext';
 import { flushSettings } from '../lib/settings';
 
+/**
+ * Полоса заголовка окна без системной рамки.
+ *
+ * Перетаскивание — по пустому месту: нативная часть получает «drag» и
+ * отдаёт окно системе. Двойной щелчок разворачивает. Крестик по умолчанию
+ * прячет окно в трей — обход при этом продолжает работать.
+ */
 export const TitleBar: React.FC = () => {
-  const {
-    status, engineMode, theme, setTheme, accent, setAccent,
-    closeBehavior, setShowTrayToast, addLog
-  } = useApp();
+  const { status, engineMode, closeBehavior, setShowTrayToast, addLog } = useApp();
   const [isMaximized, setIsMaximized] = useState(false);
 
-  /**
-   * Три схемы одной кнопкой каждая.
-   *
-   * Раньше здесь был переключатель светлая/тёмная, и до красной схемы
-   * приходилось идти в настройки. Полный набор цветов и фонов остаётся
-   * там же — тут только то, что переключают на ходу.
-   */
-  const schemes: { id: string; label: string; icon: React.ComponentType<{ className?: string }>; color: string; active: boolean }[] = [
-    { id: 'light', label: 'Светлая тема', icon: Sun, color: 'text-amber-400', active: theme === 'light' },
-    { id: 'dark', label: 'Тёмная тема', icon: Moon, color: 'text-indigo-400', active: theme === 'dark' && accent !== 'red' },
-    { id: 'dark-red', label: 'Тёмная с красным акцентом', icon: Flame, color: 'text-red-400', active: theme === 'dark' && accent === 'red' }
-  ];
-
-  const applyScheme = (id: string) => {
-    if (id === 'light') {
-      setTheme('light');
-    } else if (id === 'dark') {
-      setTheme('dark');
-      if (accent === 'red') setAccent('indigo');
-    } else {
-      setTheme('dark');
-      setAccent('red');
-    }
-  };
-
-  const getEngineLabel = () => {
-    switch (engineMode) {
-      case 'windivert': return 'WinDivert 64-bit';
-      case 'nfqws': return 'NFQWS (Linux)';
-      case 'tpws': return 'TPWS (macOS)';
-    }
-  };
+  const engineLabel = engineMode === 'windivert' ? 'WinDivert 64-bit'
+    : engineMode === 'nfqws' ? 'NFQWS (Linux)' : 'TPWS (macOS)';
 
   const handleTitleBarMouseDown = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (target.closest('button') || target.closest('input') || target.closest('a') || target.closest('select')) {
       return;
     }
-
-    if (e.button === 0 && e.detail === 1) {
-      if (window.chrome?.webview) {
-        window.chrome.webview.postMessage('drag');
-      }
+    if (e.button === 0 && e.detail === 1 && window.chrome?.webview) {
+      window.chrome.webview.postMessage('drag');
     }
   };
 
   const handleMaximize = () => {
     setIsMaximized(prev => !prev);
-    if (window.chrome?.webview) {
-      window.chrome.webview.postMessage('maximize');
-    }
+    if (window.chrome?.webview) window.chrome.webview.postMessage('maximize');
   };
 
   const handleMinimize = () => {
-    if (window.chrome?.webview) {
-      window.chrome.webview.postMessage('minimize');
-    }
+    if (window.chrome?.webview) window.chrome.webview.postMessage('minimize');
   };
 
   const handleClose = () => {
     if (closeBehavior === 'minimize_to_tray') {
       setShowTrayToast(true);
       addLog('info', 'Окно свернуто в системный трей. Приложение продолжает фильтрацию в фоне.', 'Tray');
-      if (window.chrome?.webview) {
-        window.chrome.webview.postMessage('minimize_to_tray');
-      }
+      if (window.chrome?.webview) window.chrome.webview.postMessage('minimize_to_tray');
       setTimeout(() => setShowTrayToast(false), 3500);
     } else {
       addLog('warn', 'Закрытие приложения. Выгрузка процессов WinDivert...', 'Core');
@@ -90,102 +55,61 @@ export const TitleBar: React.FC = () => {
     }
   };
 
+  const ctl = 'h-7 w-8 rounded-[6px] flex items-center justify-center text-t2 transition-colors';
+
   return (
     <div
       onMouseDown={handleTitleBarMouseDown}
       onDoubleClick={handleMaximize}
       onContextMenu={(e) => {
         const target = e.target as HTMLElement;
-        if (!target.closest('input') && !target.closest('textarea')) {
-          e.preventDefault();
-        }
+        if (!target.closest('input') && !target.closest('textarea')) e.preventDefault();
       }}
-      className={`h-10 w-full flex items-center justify-between px-3 border-b select-none z-50 transition-colors duration-200 cursor-default ${
-        theme === 'dark'
-          ? 'bg-slate-950/95 border-white/5 text-slate-200'
-          : 'bg-slate-100/95 border-slate-300/80 text-slate-800'
-      }`}
+      className="h-10 w-full px-3.5 flex items-center justify-between select-none shrink-0 z-50 bg-s1 border-b border-line cursor-default"
     >
-      {/* App Branding & Admin badge */}
-      <div className="flex items-center gap-2.5 pointer-events-none">
-        <div className="relative flex items-center justify-center">
-          <Shield className={`w-4 h-4 transition-colors duration-300 ${
-            status === 'connected' ? 'text-emerald-500' : status === 'connecting' ? 'text-amber-500 animate-pulse' : 'text-indigo-500'
+      <div className="flex items-center gap-2 pointer-events-none min-w-0">
+        <div className="flex items-center gap-2 pr-1">
+          <div className="w-5 h-5 rounded-[6px] flex items-center justify-center bg-ac/[0.18] border border-ac/40">
+            <Shield className="w-3 h-3 text-ac" />
+          </div>
+          <span className="font-semibold tracking-wider text-[12px] text-t1">ZAPRET 2</span>
+        </div>
+
+        <span className="px-1.5 py-0.5 rounded-[5px] text-[11px] font-mono bg-s2 text-t2 border border-line">
+          v{APP_VERSION}
+        </span>
+
+        <span
+          className="px-1.5 py-0.5 rounded-[5px] text-[11px] font-medium bg-green-500/[0.12] text-green-400 border border-green-500/[0.28]"
+          title="Программа запущена с правами администратора — без них драйвер WinDivert не загрузить"
+        >
+          ADMIN
+        </span>
+
+        <span className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-[5px] text-[11px] bg-s2 text-t2 border border-line">
+          <span className={`w-1.5 h-1.5 rounded-full ${
+            status === 'connected' ? 'bg-green-500'
+              : status === 'connecting' ? 'bg-amber-500 animate-pulse'
+              : status === 'error' ? 'bg-red-500' : 'bg-t3'
           }`} />
-          {status === 'connected' && (
-            <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-          )}
-        </div>
-
-        <span className="text-xs font-bold tracking-wider uppercase">
-          Zapret<span className="text-indigo-500 font-extrabold ml-0.5">2</span>
-        </span>
-
-        {/* Administrator UAC Badge */}
-        <span className="flex items-center gap-1 text-[10px] px-1.5 py-0.2 rounded bg-amber-500/10 text-amber-600 dark:text-amber-300 border border-amber-500/20 font-semibold" title="Приложение запущено с повышенными правами Администратора для управления пакетами WinDivert">
-          <Lock className="w-2.5 h-2.5" />
-          <span>ADMIN</span>
-        </span>
-
-        <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-black/5 dark:bg-white/5 text-slate-500 dark:text-slate-400 border border-black/10 dark:border-white/10 font-medium">
-          v{APP_VERSION}-portable
+          <span>{engineLabel}</span>
         </span>
       </div>
 
-      {/* Center Engine Badge */}
-      <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-[11px] text-slate-600 dark:text-slate-300 pointer-events-none">
-        <Cpu className="w-3 h-3 text-indigo-500" />
-        <span>Движок:</span>
-        <span className="font-semibold text-slate-900 dark:text-slate-100">{getEngineLabel()}</span>
-      </div>
-
-      {/* Right Controls: Theme switch + Window Control Buttons */}
-      <div className="flex items-center gap-1">
-        {/* Быстрое переключение схемы */}
-        <div className="flex items-center gap-0.5 mr-1.5 p-0.5 rounded-lg bg-black/5 dark:bg-white/5">
-          {schemes.map(s => {
-            const Icon = s.icon;
-            return (
-              <button
-                key={s.id}
-                onClick={() => applyScheme(s.id)}
-                title={s.label}
-                className={`p-1.5 rounded-md transition-colors ${
-                  s.active
-                    ? 'bg-white dark:bg-white/15 shadow-xs'
-                    : 'hover:bg-black/5 dark:hover:bg-white/10'
-                }`}
-              >
-                <Icon className={`w-3.5 h-3.5 ${s.active ? s.color : 'text-slate-400 dark:text-slate-500'}`} />
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Windows Window Controls */}
-        <div className="flex items-center">
-          <button
-            onClick={handleMinimize}
-            title="Свернуть"
-            className="h-8 w-9 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors rounded-sm"
-          >
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={handleMaximize}
-            title={isMaximized ? "Восстановить" : "Развернуть"}
-            className="h-8 w-9 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 transition-colors rounded-sm"
-          >
-            {isMaximized ? <Copy className="w-3 h-3 rotate-180" /> : <Square className="w-3 h-3" />}
-          </button>
-          <button
-            onClick={handleClose}
-            title={closeBehavior === 'minimize_to_tray' ? 'Свернуть в системный трей' : 'Закрыть приложение'}
-            className="h-8 w-9 flex items-center justify-center text-slate-500 dark:text-slate-400 hover:text-white hover:bg-rose-600 transition-colors rounded-sm"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
+      <div className="flex items-center gap-0.5">
+        <button onClick={handleMinimize} title="Свернуть" className={`${ctl} hover:bg-white/[0.06] hover:text-t1`}>
+          <Minus className="w-3.5 h-3.5" />
+        </button>
+        <button onClick={handleMaximize} title={isMaximized ? 'Восстановить' : 'Развернуть'} className={`${ctl} hover:bg-white/[0.06] hover:text-t1`}>
+          {isMaximized ? <Copy className="w-3 h-3 rotate-180" /> : <Square className="w-3 h-3" />}
+        </button>
+        <button
+          onClick={handleClose}
+          title={closeBehavior === 'minimize_to_tray' ? 'Свернуть в трей — обход продолжит работать' : 'Закрыть программу'}
+          className={`${ctl} hover:bg-red-500/20 hover:text-red-400`}
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
       </div>
     </div>
   );

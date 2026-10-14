@@ -1,36 +1,13 @@
 import React, { useRef, useState } from 'react';
 import {
-  Settings,
-  Shield,
-  Layers,
-  Check,
-  ExternalLink,
-  Sparkles,
-  RefreshCw,
-  Sun,
-  Moon,
-  Lock,
-  CheckCircle2,
-  Trash2,
-  Activity,
-  FolderOpen,
-  BellRing,
-  Download,
-  HardDrive,
-  Palette,
-  Flame,
-  Image as ImageIcon,
-  Eraser,
-  Wand2
+  RefreshCw, Download, Trash2, FolderOpen, Sparkles, Cpu, ExternalLink, Image as ImageIcon,
+  CheckCircle2, Check
 } from 'lucide-react';
-import { useApp, BUNDLED_CORE_VERSION } from '../context/AppContext';
-import { ACCENTS, BACKGROUNDS, buildSurfaceRamp } from '../lib/theme';
-import { CloseBehavior } from '../types';
+import { useApp, BUNDLED_CORE_VERSION, APP_VERSION } from '../context/AppContext';
+import { ACCENTS, BACKGROUNDS } from '../lib/theme';
+import { Button, Card, CardHead, Note, Toggle } from '../components/ui';
 
-/**
- * Размер в человеческом виде. Нативная часть шлёт байты, чтобы не решать
- * за интерфейс, как их показывать.
- */
+/** Размер в человеческом виде: нативная часть шлёт байты. */
 const formatSize = (bytes: number): string => {
   if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + ' ГБ';
   if (bytes >= 1048576) return Math.round(bytes / 1048576) + ' МБ';
@@ -38,46 +15,26 @@ const formatSize = (bytes: number): string => {
   return bytes + ' Б';
 };
 
-/** «2026-09-05, 14:31» вместо ISO-строки, которую читать невозможно. */
+/** «05.09.2026, 14:31» вместо ISO-строки. */
 const formatChecked = (iso: string): string => {
   if (!iso) return 'ещё не проверялось';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return 'ещё не проверялось';
-  return d.toLocaleString('ru-RU', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const openUrl = (url: string) => {
+  if (window.chrome?.webview) window.chrome.webview.postMessage('open_url:' + url);
+  else window.open(url, '_blank');
 };
 
 export const SettingsView: React.FC = () => {
   const {
-    openWizard,
-    addLog,
-    stats,
-    theme,
-    toggleTheme,
-    updateInfo,
-    checkForUpdates,
-    autoCheckUpdates,
-    setAutoCheckUpdates,
-    setIsUpdateModalOpen,
-    setTheme,
-    accent,
-    setAccent,
-    background,
-    setBackground,
-    customBackground,
-    setCustomBackground,
-    clearCustomBackground,
-    closeBehavior,
-    setCloseBehavior,
-    killZombieWinDivert,
-    openAppFolder,
-    isWatchdogClean,
-    discordCache,
-    isDiscordCleaning,
-    scanDiscordCache,
-    cleanDiscordCache
+    openWizard, stats, updateInfo, checkForUpdates, autoCheckUpdates, setAutoCheckUpdates,
+    setIsUpdateModalOpen, accent, setAccent, background, setBackground,
+    customBackground, setCustomBackground, clearCustomBackground,
+    closeBehavior, setCloseBehavior, killZombieWinDivert, openAppFolder, isWatchdogClean,
+    discordCache, isDiscordCleaning, scanDiscordCache, cleanDiscordCache
   } = useApp();
 
   // Удаление необратимо, поэтому кнопка срабатывает со второго нажатия:
@@ -96,584 +53,237 @@ export const SettingsView: React.FC = () => {
     e.target.value = '';
     if (!file) return;
     setBgBusy(true);
-    try {
-      await setCustomBackground(file);
-    } finally {
-      setBgBusy(false);
-    }
-  };
-
-  /** Цвет плитки фона — та же ступень, которой закрашено окно. */
-  const swatchOf = (hue: number, sat: number) => {
-    const r = buildSurfaceRamp(hue, sat);
-    const c = r[theme === 'dark' ? 900 : 200];
-    return `rgb(${c[0]} ${c[1]} ${c[2]})`;
+    try { await setCustomBackground(file); } finally { setBgBusy(false); }
   };
 
   return (
-    <div className="h-full flex flex-col p-6 space-y-5 overflow-y-auto select-none">
-      {/* Header */}
-      <div>
-        <h2 className="text-lg font-bold flex items-center gap-2">
-          <Settings className="w-5 h-5 text-indigo-500" />
-          Настройки приложения, WinDivert и системного трея
-        </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Управление зависшими процессами, хранением файлов ядра и поведением окна
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        {/* Мастер настройки — повторный запуск */}
-        <div className={`p-4 rounded-xl border flex items-center gap-4 ${
-          theme === 'dark'
-            ? 'bg-gradient-to-r from-indigo-950/50 to-slate-900/60 border-indigo-500/25'
-            : 'bg-gradient-to-r from-indigo-50 to-white border-indigo-200 shadow-xs'
-        }`}>
-          <div className="w-10 h-10 rounded-xl bg-indigo-500/15 text-indigo-500 flex items-center justify-center shrink-0">
-            <Wand2 className="w-5 h-5" />
+    <div className="h-full overflow-y-auto p-5 space-y-3 select-none">
+      <div className="grid grid-cols-2 gap-3">
+        {/* Внешний вид */}
+        <Card className="p-3.5 space-y-2.5">
+          <div className="text-[13px] font-semibold text-t1">Внешний вид</div>
+          <div className="grid grid-cols-2 gap-2">
+            {BACKGROUNDS.map(t => {
+              const on = background === t.id && !customBackground;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setBackground(t.id)}
+                  className={`p-2.5 rounded-[9px] text-left transition-all border ${on ? 'border-ac' : 'border-line hover:border-line-strong'}`}
+                  style={{ backgroundColor: t.bg }}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-t1">{t.label}</span>
+                    {on && <Check className="w-3.5 h-3.5 text-ac" />}
+                  </div>
+                  <div className="flex items-center gap-1 mt-1.5">
+                    {[t.s1, t.s2, t.s3].map(c => <span key={c} className="w-4 h-3 rounded-[3px] border border-white/10" style={{ backgroundColor: c }} />)}
+                    <span className="text-[11px] font-mono text-t3 ml-1">{t.bg}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-slate-900 dark:text-slate-100">Мастер настройки</div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Заново проверит компьютер, подберёт обход для Discord и YouTube и поможет включить
-              мост для Telegram. Пригодится, если сменили провайдера или что-то перестало открываться.
-            </p>
-          </div>
-          <button
-            onClick={openWizard}
-            className="px-3.5 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors shrink-0"
-          >
-            Запустить мастер
-          </button>
-        </div>
-
-        {/* 0. Оформление */}
-        <div className={`p-4 rounded-xl border space-y-3.5 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Palette className="w-4 h-4 text-indigo-500" />
-            Оформление: схема, акцент и фон
-          </span>
-
-          {/* Схема */}
-          <div>
-            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
-              Схема
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { id: 'light', label: 'Светлая', icon: Sun, on: theme === 'light' },
-                { id: 'dark', label: 'Тёмная', icon: Moon, on: theme === 'dark' && accent !== 'red' },
-                { id: 'dark-red', label: 'Тёмная красная', icon: Flame, on: theme === 'dark' && accent === 'red' }
-              ].map(s => {
-                const Icon = s.icon;
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => {
-                      if (s.id === 'light') setTheme('light');
-                      else if (s.id === 'dark') { setTheme('dark'); if (accent === 'red') setAccent('indigo'); }
-                      else { setTheme('dark'); setAccent('red'); }
-                    }}
-                    className={`p-2.5 rounded-xl border text-[11px] font-bold flex items-center gap-2 transition-all ${
-                      s.on
-                        ? 'bg-indigo-600/20 border-indigo-500 text-indigo-900 dark:text-indigo-200'
-                        : 'bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{s.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Акцент */}
-          <div>
-            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
-              Цвет акцента
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center justify-between pt-0.5">
+            <span className="text-[12px] text-t2">Цвет акцента:</span>
+            <div className="flex items-center gap-2">
               {ACCENTS.map(a => (
                 <button
                   key={a.id}
+                  type="button"
                   onClick={() => setAccent(a.id)}
                   title={a.label}
-                  className={`w-7 h-7 rounded-full border-2 transition-transform hover:scale-110 ${
-                    accent === a.id
-                      ? 'border-slate-900 dark:border-white scale-110'
-                      : 'border-transparent'
-                  }`}
-                  style={{ background: a.swatch }}
+                  className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                  style={{ backgroundColor: a.swatch, outline: accent === a.id ? '2px solid white' : 'none', outlineOffset: 2 }}
                 />
               ))}
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 ml-1">
-                Кнопки, ссылки и выделения по всему приложению
-              </span>
             </div>
           </div>
-
-          {/* Фон */}
-          <div>
-            <div className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
-              Фон
-            </div>
-            <div className="grid grid-cols-4 gap-2">
-              {BACKGROUNDS.map(b => (
-                <button
-                  key={b.id}
-                  onClick={() => setBackground(b.id)}
-                  className={`p-2 rounded-xl border text-[10px] font-bold flex items-center gap-2 transition-all ${
-                    background === b.id && !customBackground
-                      ? 'border-indigo-500 text-slate-900 dark:text-slate-100'
-                      : 'border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
-                  }`}
-                >
-                  <span
-                    className="w-5 h-5 rounded-md border border-black/10 dark:border-white/10 shrink-0"
-                    style={{ background: swatchOf(b.hue, b.sat) }}
-                  />
-                  <span className="truncate">{b.label}</span>
-                </button>
-              ))}
-            </div>
-
-            <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-2">
-              Фон задаёт тон всем панелям и тексту: светлота ступеней не меняется,
-              поэтому контраст остаётся прежним при любом выборе. Вместе с фоном
-              подставляется подходящий ему акцент — его можно поменять выше.
-            </p>
-          </div>
-
-          {/* Своя картинка */}
-          <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5">
-            <div className="min-w-0 flex items-center gap-3">
-              {customBackground ? (
-                <img
-                  src={customBackground}
-                  alt=""
-                  className="w-12 h-9 rounded-md object-cover border border-black/10 dark:border-white/10 shrink-0"
-                />
-              ) : (
-                <div className="w-12 h-9 rounded-md bg-black/10 dark:bg-white/5 border border-black/10 dark:border-white/10 flex items-center justify-center shrink-0">
-                  <ImageIcon className="w-4 h-4 text-slate-400" />
-                </div>
-              )}
+          <div className="flex items-center justify-between gap-3 px-2.5 py-2 rounded-[8px] bg-s2 border border-line">
+            <div className="flex items-center gap-2.5 min-w-0">
+              {customBackground
+                ? <img src={customBackground} alt="" className="w-10 h-7 rounded-[5px] object-cover border border-line shrink-0" />
+                : <div className="w-10 h-7 rounded-[5px] bg-white/[0.04] border border-line flex items-center justify-center shrink-0"><ImageIcon className="w-3.5 h-3.5 text-t3" /></div>}
               <div className="min-w-0">
-                <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {customBackground ? 'Фоном стоит своё изображение' : 'Своё изображение фоном'}
-                </div>
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Тон интерфейса подбирается по среднему цвету картинки. Поверх неё
-                  кладётся затемняющий слой — без него текст поверх снимка нечитаем.
-                </p>
+                <div className="text-[12px] font-medium text-t1">{customBackground ? 'Фоном стоит своё изображение' : 'Своё изображение фоном'}</div>
+                <div className="text-[11px] text-t3 truncate">Под затемняющим слоем; акцент подберётся под тон снимка</div>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              {customBackground && (
-                <button
-                  onClick={clearCustomBackground}
-                  className="px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[11px] font-bold text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10 transition-colors"
-                >
-                  Убрать
-                </button>
-              )}
-              <button
-                onClick={() => fileInput.current && fileInput.current.click()}
-                disabled={bgBusy}
-                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-[11px] font-bold shadow-xs transition-colors"
-              >
-                {bgBusy ? 'Обработка...' : 'Выбрать...'}
-              </button>
-              <input
-                ref={fileInput}
-                type="file"
-                accept="image/*"
-                onChange={pickImage}
-                className="hidden"
-              />
+            <div className="flex items-center gap-1.5 shrink-0">
+              {customBackground && <Button variant="ghost" size="sm" onClick={clearCustomBackground}>Убрать</Button>}
+              <Button variant="secondary" size="sm" onClick={() => fileInput.current && fileInput.current.click()} disabled={bgBusy}>
+                {bgBusy ? 'Обработка…' : 'Выбрать…'}
+              </Button>
+              <input ref={fileInput} type="file" accept="image/*" onChange={pickImage} className="hidden" />
             </div>
           </div>
-        </div>
+        </Card>
 
-        {/* 1. WinDivert Zombie Process Watchdog & Cleanup */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-emerald-500" />
-              Автообнаружение и очистка зависших процессов (WinDivert Watchdog)
-            </span>
-            <button
-              onClick={killZombieWinDivert}
-              className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+        {/* Поведение и обновления */}
+        <Card className="p-3.5 space-y-2.5">
+          <div className="text-[13px] font-semibold text-t1">Поведение и обновления</div>
+          <div className="flex items-center justify-between gap-2 text-[12px]">
+            <span className="text-t2">При закрытии окна:</span>
+            <select
+              value={closeBehavior}
+              onChange={(e) => setCloseBehavior(e.target.value as typeof closeBehavior)}
+              className="ui-input px-2.5 py-1 text-[12px]"
             >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Очистить зависшие winws</span>
-            </button>
+              <option value="minimize_to_tray">Сворачивать в трей</option>
+              <option value="exit_app">Закрывать полностью</option>
+            </select>
+          </div>
+          <div className="text-[11px] text-t3 leading-snug -mt-1">
+            {closeBehavior === 'minimize_to_tray'
+              ? 'Окно прячется в трей около часов, обход продолжает работать в фоне.'
+              : 'Ядро останавливается, драйвер WinDivert выгружается — если им не пользуется другая программа.'}
           </div>
 
-          <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 space-y-2 text-xs">
-            <div>
-              <div className="font-semibold text-slate-800 dark:text-slate-200">Автовыгрузка при непредвиденном закрытии</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                Оставшиеся процессы winws.exe завершаются автоматически при запуске
-                и при выходе из приложения — отдельно включать это не нужно.
+          <div className="flex items-center justify-between gap-2 text-[12px] pt-1 border-t border-line">
+            <div className="min-w-0">
+              <div className="text-t1 flex items-center gap-1.5">
+                Текущая версия v{APP_VERSION}
+                {updateInfo.hasUpdate
+                  ? <span className="text-ac-300 text-[11px]">· вышла {updateInfo.latestVersion}</span>
+                  : updateInfo.lastCheckedAt && <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />}
               </div>
+              <div className="text-[11px] text-t3">Проверялось: {formatChecked(updateInfo.lastCheckedAt)}</div>
             </div>
-
-            <div>
-              <div className="font-semibold text-slate-800 dark:text-slate-200">Что делает кнопка</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                Снимает только посторонние winws.exe — те, которые запустило не это
-                приложение. Своё работающее ядро она не трогает, для него есть кнопка
-                питания. В журнал попадает результат: сколько нашли и сколько сняли.
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between pt-1 border-t border-black/5 dark:border-white/5 text-[11px]">
-              <span className="text-slate-500">Процесс ядра:</span>
-              <span className={`font-mono font-bold ${
-                stats.pid ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'
-              }`}>
-                {!isWatchdogClean ? 'Очистка...' : stats.pid ? `winws.exe работает (PID ${stats.pid})` : 'Не запущен'}
-              </span>
-            </div>
+            {updateInfo.hasUpdate
+              ? <Button size="sm" icon={Download} onClick={() => setIsUpdateModalOpen(true)}>Обновить до {updateInfo.latestVersion}</Button>
+              : <Button variant="secondary" size="sm" icon={RefreshCw} spin={updateInfo.isChecking} onClick={() => checkForUpdates(false)} disabled={updateInfo.isChecking}>
+                  {updateInfo.isChecking ? 'Проверка…' : 'Проверить обновления'}
+                </Button>}
           </div>
-        </div>
-
-
-        {/* 2. Кэш Discord */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <Eraser className="w-4 h-4 text-amber-500" />
-              Кэш Discord
-            </span>
-            <button
-              onClick={scanDiscordCache}
-              disabled={isDiscordCleaning}
-              className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 disabled:opacity-50 text-[11px] font-bold text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10 transition-colors flex items-center gap-1.5"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isDiscordCleaning ? 'animate-spin' : ''}`} />
-              <span>Посчитать</span>
-            </button>
+          <div className="flex items-center justify-between gap-2 text-[12px]">
+            <div className="min-w-0">
+              <div className="text-t2">Автоматическая проверка при запуске</div>
+              <div className="text-[11px] text-t3">Один запрос к GitHub, не чаще раза в 6 часов</div>
+            </div>
+            <Toggle checked={autoCheckUpdates} onChange={setAutoCheckUpdates} />
           </div>
+          <div className="text-[11px] text-t3 leading-snug">
+            Обновляется само приложение: сборка сверяется по SHA-256 и подменяется при перезапуске. Ядро zapret
+            ({BUNDLED_CORE_VERSION}) зашито в .exe и приезжает только с новой сборкой.
+          </div>
+        </Card>
+      </div>
 
-          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-            Обход рвёт соединения посреди загрузки, Discord складывает в кэш обрезанные
-            ответы и продолжает показывать поломку уже после того, как связь починили.
-            Помогает, когда Discord висит на «Starting» или не грузит картинки при
-            работающем обходе.
+      <div className="grid grid-cols-2 gap-3">
+        {/* Кэш Discord */}
+        <Card className="p-3.5 space-y-2">
+          <CardHead
+            title="Discord — очистка кэша"
+            hint={<span className="text-green-400">вход и настройки не трогаем</span>}
+            actions={<Button variant="secondary" size="sm" icon={RefreshCw} spin={isDiscordCleaning} onClick={scanDiscordCache} disabled={isDiscordCleaning}>Посчитать</Button>}
+          />
+          <p className="text-[11px] text-t3 leading-snug">
+            Помогает, когда Discord висит на «Starting» или не грузит картинки при работающем обходе: в кэше остаются
+            обрезанные ответы времён, когда связь рвалась.
           </p>
 
           {discordCache === null && (
-            <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="px-3 py-2 rounded-[8px] bg-s2 border border-line text-[12px] text-t2">
               Нажмите «Посчитать», чтобы узнать размер. Само по себе ничего не удаляется.
             </div>
           )}
-
           {discordCache !== null && discordCache.length === 0 && (
-            <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] text-slate-500 dark:text-slate-400">
+            <div className="px-3 py-2 rounded-[8px] bg-s2 border border-line text-[12px] text-t2">
               Discord на этом компьютере не найден — чистить нечего.
             </div>
           )}
-
           {discordCache !== null && discordCache.length > 0 && (
             <div className="space-y-2">
-              <div className="rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 divide-y divide-black/5 dark:divide-white/5">
+              <div className="rounded-[8px] bg-s2 border border-line divide-y divide-white/[0.05]">
                 {discordCache.map(item => (
-                  <div key={item.id} className="flex items-center justify-between px-3 py-2 text-[11px]">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">{item.name}</span>
-                      {item.running && (
-                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-[9px] font-bold">
-                          запущен
-                        </span>
-                      )}
-                    </div>
-                    <span className="font-mono text-slate-600 dark:text-slate-300 shrink-0">
-                      {formatSize(item.sizeBytes)}
-                      <span className="text-slate-400 dark:text-slate-500"> · {item.dirs} кат.</span>
+                  <div key={item.id} className="flex items-center justify-between px-3 py-1.5 text-[12px]">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <span className="font-medium text-t1">{item.name}</span>
+                      {item.running && <span className="px-1.5 rounded text-[10px] bg-amber-500/15 text-amber-300">запущен</span>}
                     </span>
+                    <span className="font-mono text-t2 shrink-0">{formatSize(item.sizeBytes)}<span className="text-t3"> · {item.dirs} кат.</span></span>
                   </div>
                 ))}
               </div>
-
-              <div className="p-3 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 text-[11px] space-y-1">
-                <div className="text-slate-600 dark:text-slate-300">
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">Удаляется:</span>{' '}
-                  <span className="font-mono">Cache</span>, <span className="font-mono">Code Cache</span>,{' '}
-                  <span className="font-mono">GPUCache</span>, <span className="font-mono">Dawn*Cache</span>,{' '}
-                  <span className="font-mono">Service Worker</span>, <span className="font-mono">logs</span>.
-                </div>
-                <div className="text-slate-600 dark:text-slate-300">
-                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">Не трогаем:</span>{' '}
-                  <span className="font-mono">Local Storage</span> — там ваш вход в аккаунт.
-                  Разлогинить вас очистка не может. Сам клиент в{' '}
-                  <span className="font-mono">%LOCALAPPDATA%\Discord</span> тоже не трогается.
-                </div>
+              <div className="text-[11px] text-t3 leading-snug">
+                <span className="text-t2">Удаляется:</span> Cache, Code Cache, GPUCache, Dawn*Cache, Service Worker, logs.{' '}
+                <span className="text-green-400">Не трогаем:</span> Local Storage — там ваш вход в аккаунт.
               </div>
-
               {discordRunning && (
-                <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-300">
-                  Discord запущен. Пока процесс жив, файлы заблокированы — кнопка сначала
-                  закроет его. Несохранённое в чатах Discord не теряется, но звонок оборвётся.
-                </div>
+                <Note tone="warn">Discord запущен. Пока процесс жив, файлы заблокированы — кнопка сначала закроет его. Звонок оборвётся.</Note>
               )}
-
-              <div className="flex items-center justify-between gap-3 pt-1">
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Освободится примерно <span className="font-mono font-bold text-slate-700 dark:text-slate-200">{formatSize(discordTotal)}</span>
-                </span>
-                <button
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] text-t2">Освободится примерно <span className="font-mono text-t1">{formatSize(discordTotal)}</span></span>
+                <Button
+                  variant={armed ? 'danger' : 'secondary'}
+                  size="sm"
+                  icon={Trash2}
+                  disabled={isDiscordCleaning || discordTotal === 0}
                   onClick={() => {
                     if (!armed) { setArmed(true); return; }
                     setArmed(false);
                     cleanDiscordCache(discordCache.map(i => i.id), discordRunning);
                   }}
-                  disabled={isDiscordCleaning || discordTotal === 0}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 ${
-                    armed
-                      ? 'bg-rose-600 hover:bg-rose-500 text-white'
-                      : 'bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-700 dark:text-slate-200 border border-black/10 dark:border-white/10'
-                  }`}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>
-                    {isDiscordCleaning
-                      ? 'Очищаю...'
-                      : armed
-                        ? `Точно удалить ${formatSize(discordTotal)}?`
-                        : discordRunning ? 'Закрыть Discord и очистить' : 'Очистить кэш'}
-                  </span>
-                </button>
+                  {isDiscordCleaning ? 'Очищаю…'
+                    : armed ? `Точно удалить ${formatSize(discordTotal)}?`
+                    : discordRunning ? 'Закрыть Discord и очистить' : 'Очистить кэш'}
+                </Button>
               </div>
             </div>
           )}
-        </div>
+        </Card>
 
-        {/* 3. Storage & Release Location */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <HardDrive className="w-4 h-4 text-indigo-500" />
-              Хранение данных и расположение файлов ядра Zapret2
-            </span>
-            <button
-              onClick={openAppFolder}
-              className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-600 dark:text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-colors flex items-center gap-1.5"
-            >
-              <FolderOpen className="w-3.5 h-3.5" />
-              <span>Открыть папку с файлами</span>
-            </button>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 space-y-2 text-xs">
-            <div className="text-slate-700 dark:text-slate-300 leading-relaxed">
-              <p><strong>📁 Где хранятся файлы:</strong></p>
-              <p className="font-mono text-[11px] text-indigo-600 dark:text-indigo-300 break-all bg-black/10 dark:bg-black/40 p-1.5 rounded-md mt-1">
-                %LOCALAPPDATA%\Zapret2-GUI\ — bin\ (winws.exe, WinDivert, списки доменов), dist\ (интерфейс), logs\ (журналы с ротацией)
-              </p>
-            </div>
-            <div className="pt-2 border-t border-black/5 dark:border-white/5 text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
-              <p>💡 <strong>Что внутри одного .exe (~2,4 МБ)</strong></p>
-              <p>
-                Интерфейс и ядро zapret (winws.exe, WinDivert, списки доменов, TLS-пейлоады)
-                упакованы в исполняемый файл как ресурсы и распаковываются при запуске.
-                Отрисовкой занимается встроенный в Windows движок WebView2, поэтому
-                сборка не тащит с собой браузер, как Electron.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* 3. GitHub Auto-Updater with Accurate Status */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <RefreshCw className={`w-4 h-4 text-indigo-500 ${updateInfo.isChecking ? 'animate-spin' : ''}`} />
-              Обновление приложения с GitHub (snax1k/new-zapret2-gui)
-            </span>
-
-            {updateInfo.hasUpdate ? (
-              <button
-                onClick={() => setIsUpdateModalOpen(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Открыть релиз {updateInfo.latestVersion}</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => checkForUpdates(false)}
-                disabled={updateInfo.isChecking}
-                className="px-3.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-slate-800 dark:text-slate-200 border border-black/10 dark:border-white/10 text-xs font-bold transition-colors flex items-center gap-1.5"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${updateInfo.isChecking ? 'animate-spin' : ''}`} />
-                <span>{updateInfo.isChecking ? 'Проверка...' : 'Проверить обновления'}</span>
-              </button>
-            )}
-          </div>
-
-          <div className="p-3 rounded-xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-500/20 space-y-2">
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-600 dark:text-slate-400">
-                Версия приложения: <strong>v{updateInfo.currentVersion}-portable</strong>
-              </span>
-
-              {updateInfo.hasUpdate ? (
-                <span className="text-indigo-600 dark:text-indigo-300 font-semibold flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-                  Вышла версия {updateInfo.latestVersion}
-                </span>
-              ) : updateInfo.lastCheckedAt ? (
-                <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                  Установлена последняя версия
-                </span>
-              ) : (
-                <span className="text-slate-500 dark:text-slate-400 font-semibold">
-                  Обновления ещё не проверялись
-                </span>
-              )}
-            </div>
-
-            <div className="text-[11px] text-slate-600 dark:text-slate-300">
-              <strong className="text-slate-900 dark:text-slate-100">Что именно обновляется:</strong>{' '}
-              само приложение. Сборка скачивается из релиза, сверяется по SHA-256 и
-              подменяется при перезапуске. Без файла контрольных сумм установка не
-              выполняется — иначе мы запускали бы непроверенный файл от администратора.
-            </div>
-
-            <div className="text-[11px] text-slate-600 dark:text-slate-300">
-              <strong className="text-slate-900 dark:text-slate-100">Ядро zapret так не обновляется:</strong>{' '}
-              winws.exe и WinDivert зашиты в .exe ресурсами и приезжают только с новой
-              сборкой приложения. Сейчас в сборке {BUNDLED_CORE_VERSION}.
-            </div>
-          </div>
-
-          <div
-            onClick={() => setAutoCheckUpdates(!autoCheckUpdates)}
-            className="flex items-center justify-between gap-3 p-3 rounded-xl border cursor-pointer transition-colors bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 hover:bg-black/10 dark:hover:bg-white/5"
-          >
+        {/* Настройка заново и обслуживание */}
+        <Card className="p-3.5 space-y-2.5">
+          <div className="text-[13px] font-semibold text-t1">Настройка заново и обслуживание</div>
+          <div className="flex items-start justify-between gap-3 px-3 py-2 rounded-[8px] bg-s2 border border-line">
             <div className="min-w-0">
-              <div className="text-xs font-bold text-slate-900 dark:text-slate-100">
-                Проверять обновления при запуске
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-0.5">
-                Один запрос к GitHub, не чаще раза в шесть часов. Окно не открывается —
-                о новой версии сообщает плашка в боковом меню.
-                {' '}Последняя проверка: {formatChecked(updateInfo.lastCheckedAt)}.
-              </p>
+              <div className="text-[12px] font-medium text-t1">Мастер настройки</div>
+              <div className="text-[11px] text-t3 leading-snug">Проверит компьютер, подберёт обход для Discord и YouTube и включит мост Telegram. Пригодится, если сменили провайдера.</div>
             </div>
-
-            <div className={`w-9 h-5 rounded-full shrink-0 transition-colors relative ${
-              autoCheckUpdates ? 'bg-indigo-600' : 'bg-slate-400/40 dark:bg-slate-600'
-            }`}>
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
-                autoCheckUpdates ? 'translate-x-4' : 'translate-x-0'
-              }`} />
-            </div>
+            <Button variant="secondary" size="sm" icon={Sparkles} onClick={openWizard}>Открыть</Button>
           </div>
-        </div>
-
-        {/* 4. Window Close Behavior (Tray vs Full Exit) */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <BellRing className="w-4 h-4 text-indigo-500" />
-            Действие при нажатии кнопки «Закрыть» (Крестик)
-          </span>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            <div
-              onClick={() => setCloseBehavior('minimize_to_tray')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                closeBehavior === 'minimize_to_tray'
-                  ? 'bg-indigo-600/20 border-indigo-500 text-indigo-900 dark:text-indigo-200 shadow-xs'
-                  : 'bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-bold">Сворачивать в системный трей (По умолчанию)</span>
-                {closeBehavior === 'minimize_to_tray' && <Check className="w-3.5 h-3.5 text-indigo-500" />}
+          <div className="flex items-start justify-between gap-3 px-3 py-2 rounded-[8px] bg-s2 border border-line">
+            <div className="min-w-0">
+              <div className="text-[12px] font-medium text-t1">Зависшие копии ядра</div>
+              <div className="text-[11px] text-t3 leading-snug">
+                Снимает только посторонние winws.exe. Своё ядро не трогает.{' '}
+                <span className={stats.pid ? 'text-green-400' : 'text-t2'}>
+                  {!isWatchdogClean ? 'Очистка…' : stats.pid ? `Ядро работает (PID ${stats.pid})` : 'Ядро не запущено'}
+                </span>
               </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Окно прячется в трей около часов. Обход блокировок продолжает работать в фоне.
-              </p>
             </div>
-
-            <div
-              onClick={() => setCloseBehavior('exit_app')}
-              className={`p-3 rounded-xl border cursor-pointer transition-all ${
-                closeBehavior === 'exit_app'
-                  ? 'bg-rose-600/20 border-rose-500 text-rose-900 dark:text-rose-200 shadow-xs'
-                  : 'bg-black/5 dark:bg-black/20 border-black/5 dark:border-white/5 text-slate-600 dark:text-slate-400'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs font-bold">Полностью закрывать приложение</span>
-                {closeBehavior === 'exit_app' && <Check className="w-3.5 h-3.5 text-rose-500" />}
-              </div>
-              <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                Завершать все процессы winws.exe и полностью закрывать приложение.
-                Драйвер WinDivert при этом тоже выгружается — если им не пользуется
-                другая программа. На работу сети выгрузка не влияет.
-              </p>
-            </div>
+            <Button variant="secondary" size="sm" icon={Cpu} onClick={killZombieWinDivert}>Очистить</Button>
           </div>
-        </div>
-
-        {/* 5. Windows Elevation & Autostart */}
-        <div className={`p-4 rounded-xl border space-y-3 ${
-          theme === 'dark' ? 'bg-slate-900/60 border-white/10' : 'bg-white border-slate-200 shadow-xs'
-        }`}>
-          <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
-            <Shield className="w-4 h-4 text-emerald-500" />
-            Интеграция с Windows и Служба
-          </span>
-
-          <div className="space-y-2 text-xs">
-            {/* UAC Elevation Status */}
-            <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Lock className="w-4 h-4 text-amber-500 shrink-0" />
-                <div>
-                  <div className="font-semibold text-amber-700 dark:text-amber-300">Права Администратора (UAC requireAdministrator)</div>
-                  <div className="text-[10px] text-slate-500 dark:text-slate-400">Встроено в бинарник .exe для прямого доступа к сокетам WinDivert</div>
-                </div>
-              </div>
-              <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold">
-                ВКЛЮЧЕНО
-              </span>
+          <div className="flex items-start justify-between gap-3 px-3 py-2 rounded-[8px] bg-s2 border border-line">
+            <div className="min-w-0">
+              <div className="text-[12px] font-medium text-t1">Папка программы</div>
+              <div className="text-[11px] text-t3 font-mono break-all">%LOCALAPPDATA%\Zapret2-GUI — bin, списки, журналы, настройки</div>
             </div>
-
-            {/* Автозапуск и служба */}
-            <div className="p-3 rounded-lg bg-black/5 dark:bg-black/20 border border-black/5 dark:border-white/5 space-y-1">
-              <div className="font-semibold text-slate-800 dark:text-slate-200">Автозапуск и работа как служба</div>
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                Пока не реализованы. Приложению нужны права администратора, поэтому
-                обычный автозапуск через папку «Автозагрузка» приводил бы к запросу UAC
-                при каждом входе в систему — корректное решение требует задания в
-                планировщике задач и будет добавлено отдельно.
-              </div>
-            </div>
+            <Button variant="secondary" size="sm" icon={FolderOpen} onClick={openAppFolder}>Открыть</Button>
           </div>
-        </div>
+        </Card>
       </div>
+
+      {/* О программе */}
+      <Card className="px-4 py-2.5 flex items-center justify-between gap-3 text-[12px]">
+        <div className="flex items-center gap-4 text-t2 flex-wrap">
+          <span><strong className="text-t1">О программе:</strong> v{APP_VERSION}</span>
+          <span>Ядро zapret {BUNDLED_CORE_VERSION}</span>
+          <span>Драйвер WinDivert 2.2</span>
+          <span>Права администратора — встроены в .exe</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => openUrl('https://github.com/snax1k/new-zapret2-gui')}
+          className="flex items-center gap-1 text-ac-300 hover:underline shrink-0"
+        >
+          <span>GitHub проекта</span>
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      </Card>
     </div>
   );
 };

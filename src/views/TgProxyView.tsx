@@ -1,22 +1,10 @@
 import React, { useState } from 'react';
 import {
-  Send,
-  Power,
-  Copy,
-  Check,
-  RefreshCw,
-  KeyRound,
-  Wifi,
-  Network,
-  ShieldAlert,
-  Info,
-  ArrowUp,
-  ArrowDown,
-  Cloud,
-  Link2,
-  Loader2
+  Send, Power, Copy, Check, RefreshCw, KeyRound, Wifi, Network, ShieldAlert,
+  ArrowUp, ArrowDown, Cloud, Play, Square, ExternalLink, ChevronDown, ChevronUp, Loader2
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { Button, Card, Note, StatusDot, SwitchRow } from '../components/ui';
 
 const formatBytes = (n: number): string => {
   if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' ГБ';
@@ -25,64 +13,24 @@ const formatBytes = (n: number): string => {
   return n + ' Б';
 };
 
-/** Переключатель-строка: подпись, пояснение и сам тумблер справа. */
-const SettingRow: React.FC<{
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  hint: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  danger?: boolean;
-}> = ({ icon: Icon, title, hint, checked, onChange, danger }) => (
-  <button
-    onClick={() => onChange(!checked)}
-    className="w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-colors bg-black/[0.02] dark:bg-white/[0.02] border-black/5 dark:border-white/5 hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
-  >
-    <div className={`p-1.5 rounded-lg shrink-0 mt-0.5 ${
-      checked
-        ? danger
-          ? 'bg-amber-500/15 text-amber-500'
-          : 'bg-indigo-500/15 text-indigo-500'
-        : 'bg-black/5 dark:bg-white/5 text-slate-400'
-    }`}>
-      <Icon className="w-3.5 h-3.5" />
-    </div>
-
-    <div className="flex-1 min-w-0">
-      <div className="text-xs font-bold text-slate-800 dark:text-slate-100">{title}</div>
-      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">{hint}</p>
-    </div>
-
-    <div className={`w-9 h-5 rounded-full shrink-0 relative transition-colors mt-0.5 ${
-      checked ? (danger ? 'bg-amber-500' : 'bg-indigo-600') : 'bg-slate-300 dark:bg-slate-700'
-    }`}>
-      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
-        checked ? 'left-[18px]' : 'left-0.5'
-      }`} />
-    </div>
-  </button>
-);
-
+/**
+ * Встроенный мост для Telegram.
+ *
+ * Клиент подключается к нему на этой же машине, а мост выводит соединение
+ * наружу по WebSocket — транспортом веб-версии Telegram, а если адреса
+ * Telegram закрыты, то через запасной узел. К обходу DPI отношения не имеет
+ * и работает отдельно: ядро может быть выключено.
+ */
 export const TgProxyView: React.FC = () => {
   const {
-    theme,
-    tgProxy,
-    tgSettings,
-    setTgSettings,
-    startTgProxy,
-    stopTgProxy,
-    regenerateTgSecret,
-    tgLink,
-    openTgLink
+    tgProxy, tgSettings, setTgSettings, startTgProxy, stopTgProxy,
+    regenerateTgSecret, tgLink, openTgLink
   } = useApp();
 
   const [copied, setCopied] = useState(false);
   const [portDraft, setPortDraft] = useState(String(tgSettings.port));
   const [secretShown, setSecretShown] = useState(false);
-
-  const card = theme === 'dark'
-    ? 'bg-slate-900/50 border-white/5'
-    : 'bg-white border-slate-200 shadow-xs';
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const copyLink = () => {
     if (!tgLink) return;
@@ -103,304 +51,231 @@ export const TgProxyView: React.FC = () => {
 
   const s = tgProxy.stats;
   const maskedSecret = tgSettings.secret
-    ? tgSettings.secret.slice(0, 6) + '••••••••••••••••••••' + tgSettings.secret.slice(-6)
+    ? tgSettings.secret.slice(0, 6) + '••••••••••••••••' + tgSettings.secret.slice(-6)
     : '';
 
   return (
-    <div className="h-full flex flex-col p-6 space-y-4 overflow-y-auto select-none">
-      {/* Заголовок */}
-      <div>
-        <h2 className="text-lg font-bold flex items-center gap-2">
-          <Send className="w-5 h-5 text-indigo-500" />
-          Телеграм — Прокси
-        </h2>
-        <p className="text-xs text-slate-500 dark:text-slate-400 max-w-3xl">
-          Встроенный мост для Telegram. Клиент подключается к нему на этой же машине,
-          а мост выводит соединение наружу по WebSocket — транспортом веб-версии Telegram,
-          а если адреса Telegram закрыты, то через запасной узел. К обходу DPI отношения
-          не имеет и работает отдельно: ядро может быть выключено.
-        </p>
-      </div>
-
+    <div className="h-full overflow-y-auto p-5 space-y-3.5 select-none">
       {/* Состояние и выключатель */}
-      <div className={`p-4 rounded-xl border flex items-center gap-4 ${card}`}>
-        <button
-          onClick={tgProxy.running ? stopTgProxy : startTgProxy}
-          className={`w-14 h-14 rounded-2xl flex items-center justify-center border transition-all shrink-0 ${
-            tgProxy.running
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-500 shadow-glow-green'
-              : 'bg-black/5 dark:bg-white/5 border-black/10 dark:border-white/10 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
-          }`}
-          title={tgProxy.running ? 'Остановить мост' : 'Запустить мост'}
-        >
-          <Power className="w-6 h-6" />
-        </button>
-
-        <div className="flex-1 min-w-0">
-          <div className="text-sm font-bold flex items-center gap-2">
-            {tgProxy.running ? (
-              <>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_#10b981]" />
-                <span>Мост работает</span>
-              </>
-            ) : (
-              <>
-                <span className="w-2 h-2 rounded-full bg-slate-400 dark:bg-slate-600" />
-                <span>Мост остановлен</span>
-              </>
+      <Card tone={tgProxy.running ? 'ok' : tgProxy.error ? 'bad' : 'default'} className="p-4 space-y-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <StatusDot status={tgProxy.running ? 'ok' : tgProxy.error ? 'bad' : 'neutral'} pulse={tgProxy.running} size={10} />
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold text-t1 truncate">
+                {tgProxy.running
+                  ? <>Мост работает · слушает <span className="font-mono">{tgProxy.host}:{tgProxy.port}</span></>
+                  : 'Мост остановлен'}
+              </div>
+              <div className="text-[12px] text-t2">
+                {tgProxy.running
+                  ? (tgProxy.host === '0.0.0.0'
+                      ? 'Доступен и другим устройствам в вашей сети'
+                      : 'Встроенный локальный мост для приложения Telegram')
+                  : 'Порт откроется только после запуска. Обход DPI для моста не нужен.'}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 shrink-0">
+            {tgProxy.running && (
+              <div className="text-right">
+                <div className="text-[11px] text-t2">Соединений сейчас</div>
+                <div className="text-[20px] font-semibold font-mono text-t1 leading-tight">{s.active}</div>
+              </div>
             )}
+            <Button
+              variant={tgProxy.running ? 'danger' : 'primary'}
+              icon={tgProxy.running ? Square : Play}
+              onClick={tgProxy.running ? stopTgProxy : startTgProxy}
+            >
+              {tgProxy.running ? 'Остановить мост' : 'Запустить мост'}
+            </Button>
           </div>
+        </div>
+        {tgProxy.error && (
+          <Note tone="bad" icon={ShieldAlert}>Не удалось запустить: {tgProxy.error}</Note>
+        )}
+      </Card>
 
-          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-            {tgProxy.running
-              ? <>Слушает <span className="font-mono text-slate-700 dark:text-slate-200">{tgProxy.host}:{tgProxy.port}</span>
-                  {tgProxy.host === '0.0.0.0' && <> — доступен и другим устройствам в вашей сети</>}</>
-              : <>Нажмите кнопку слева. Порт откроется только после запуска.</>}
-          </div>
-
-          {tgProxy.error && (
-            <div className="mt-2 text-[11px] text-rose-500 flex items-start gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-px" />
-              <span>Не удалось запустить: {tgProxy.error}</span>
+      {/* Ссылка подключения */}
+      <Card className="p-4 space-y-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[13px] font-semibold text-t1">Ссылка для подключения</span>
+          {tgProxy.running && (
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" size="sm" icon={copied ? Check : Copy} onClick={copyLink}>
+                {copied ? 'Скопировано' : 'Копировать'}
+              </Button>
+              <Button size="sm" icon={ExternalLink} onClick={openTgLink}>Открыть в Telegram</Button>
             </div>
           )}
         </div>
-
-        {tgProxy.running && (
-          <div className="text-right shrink-0">
-            <div className="text-[10px] text-slate-500 dark:text-slate-400">Соединений сейчас</div>
-            <div className="text-2xl font-bold text-slate-800 dark:text-slate-100 leading-tight">{s.active}</div>
-          </div>
-        )}
-      </div>
-
-      {/* Ссылка подключения */}
-      <div className={`p-4 rounded-xl border space-y-3 ${card}`}>
-        <div className="flex items-center gap-2">
-          <Link2 className="w-4 h-4 text-indigo-500" />
-          <span className="text-xs font-bold">Ссылка для подключения</span>
-        </div>
-
         {tgProxy.running ? (
           <>
-            <div className={`px-3 py-2.5 rounded-lg border font-mono text-[11px] break-all ${
-              theme === 'dark'
-                ? 'bg-black/40 border-white/10 text-indigo-300'
-                : 'bg-slate-50 border-slate-300 text-indigo-700'
-            }`}>
+            <div className="px-3 py-2 rounded-[8px] font-mono text-[12px] break-all select-text bg-s2 text-t2 border border-line">
               {tgLink}
             </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={openTgLink}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md transition-colors"
-              >
-                <Send className="w-3.5 h-3.5" />
-                <span>Открыть в Telegram</span>
-              </button>
-
-              <button
-                onClick={copyLink}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 text-xs font-medium border border-black/5 dark:border-white/5 transition-colors"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Скопировано' : 'Копировать'}</span>
-              </button>
-            </div>
-
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
-              Кнопка отдаёт ссылку системе, её подхватывает установленный Telegram:
-              он покажет окно добавления прокси и включит его. Если клиент не открылся —
-              скопируйте ссылку и вставьте её в любой чат, ссылки такого вида Telegram
-              обрабатывает сам.
+            <p className="text-[11px] text-t3 leading-snug">
+              Кнопка отдаёт ссылку системе — её подхватит установленный Telegram и предложит включить прокси.
+              Если клиент не открылся, скопируйте ссылку и вставьте в любой чат: такие ссылки Telegram обрабатывает сам.
             </p>
           </>
         ) : (
-          <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+          <div className="flex items-center gap-2 text-[12px] text-t2">
             <Loader2 className="w-3.5 h-3.5 opacity-60" />
             <span>Ссылка появится после запуска моста — в ней указан адрес, которого пока нет.</span>
           </div>
         )}
-      </div>
+      </Card>
 
-      {/* Настройки */}
-      <div className={`p-4 rounded-xl border space-y-3 ${card}`}>
-        <div className="text-xs font-bold">Настройки</div>
-
-        {/* Порт */}
-        <div className="flex items-center gap-3 p-3 rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] border-black/5 dark:border-white/5">
-          <div className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-500 shrink-0">
-            <Network className="w-3.5 h-3.5" />
+      <div className="grid grid-cols-12 gap-3.5">
+        {/* Статистика */}
+        <Card className="col-span-7 p-4 space-y-2.5">
+          <div className="flex items-center justify-between text-[12px] gap-2">
+            <span className="font-semibold text-t1">Статистика</span>
+            <span className="text-t2">
+              Сейчас: <strong className="font-mono text-white">{s.active}</strong> · Всего: <strong className="font-mono text-white">{s.total}</strong>
+            </span>
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-slate-800 dark:text-slate-100">Порт</div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
-              На нём мост ждёт подключения от Telegram. Менять есть смысл, только
-              если 1443 занят другой программой.
-            </p>
-          </div>
-          <input
-            type="number"
-            min={1}
-            max={65535}
-            value={portDraft}
-            onChange={(e) => setPortDraft(e.target.value)}
-            onBlur={commitPort}
-            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
-            className={`w-24 px-2.5 py-1.5 rounded-lg border text-xs font-mono text-center focus:outline-none focus:border-indigo-500 shrink-0 ${
-              theme === 'dark'
-                ? 'bg-black/40 border-white/10 text-slate-100'
-                : 'bg-slate-50 border-slate-300 text-slate-900'
-            }`}
-          />
-        </div>
-
-        {/* Секрет */}
-        <div className="flex items-center gap-3 p-3 rounded-xl border bg-black/[0.02] dark:bg-white/[0.02] border-black/5 dark:border-white/5">
-          <div className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-500 shrink-0">
-            <KeyRound className="w-3.5 h-3.5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs font-bold text-slate-800 dark:text-slate-100">Секрет</div>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
-              Отличает ваш мост от чужого: без него рукопожатие не проходит.
-              Он уже внутри ссылки, отдельно вводить его не нужно.
-            </p>
-            <button
-              onClick={() => setSecretShown(v => !v)}
-              className="mt-1.5 font-mono text-[11px] text-slate-600 dark:text-slate-300 hover:text-indigo-500 transition-colors break-all text-left"
-              title="Нажмите, чтобы показать или скрыть"
-            >
-              {secretShown ? tgSettings.secret : maskedSecret}
-            </button>
-          </div>
-          <button
-            onClick={regenerateTgSecret}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 text-[11px] font-medium border border-black/5 dark:border-white/5 transition-colors shrink-0"
-            title="Прежняя ссылка перестанет работать"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Сменить</span>
-          </button>
-        </div>
-
-        <SettingRow
-          icon={Power}
-          title="Запускать вместе с программой"
-          hint="Мост поднимется сам при старте. Порт при этом открывается без вашего участия, поэтому по умолчанию выключено."
-          checked={tgSettings.autoStart}
-          onChange={(v) => setTgSettings({ autoStart: v })}
-        />
-
-        <SettingRow
-          icon={Wifi}
-          title="Доступ из локальной сети"
-          hint="Мост станет слушать все адреса, и по ссылке смогут подключиться телефон или второй компьютер в той же сети. Порт при этом виден всем соседям по сети — защищает только секрет."
-          checked={tgSettings.lanAccess}
-          onChange={(v) => setTgSettings({ lanAccess: v })}
-          danger
-        />
-
-        <SettingRow
-          icon={Network}
-          title="Прямое соединение как резерв"
-          hint="Если веб-транспорт не прошёл, мост попробует обычный MTProto прямо к дата-центру. Помогает там, где Telegram не заблокирован вовсе, и бесполезно там, где закрыты подсети."
-          checked={tgSettings.allowDirectTcp}
-          onChange={(v) => setTgSettings({ allowDirectTcp: v })}
-        />
-
-        <SettingRow
-          icon={Cloud}
-          title="Обход через запасные узлы"
-          hint="Если адреса Telegram закрыты целиком — а закрывают обычно именно так, подсетями, — мост пойдёт через сторонний узел, который передаёт соединение дальше. На заблокированных сетях работает именно этот путь. Узел чужой: он видит ваш адрес и объём трафика, но не его содержимое — переписка зашифрована ключами самого Telegram."
-          checked={tgSettings.allowCloudflare}
-          onChange={(v) => setTgSettings({ allowCloudflare: v })}
-        />
-
-        <SettingRow
-          icon={ShieldAlert}
-          title="Повтор с чужим именем в TLS"
-          hint="Если рукопожатие с именем kws*.web.telegram.org не проходит, мост повторит попытку, подставив в TLS постороннее имя. Настоящий адресат при этом не меняется. Помогает против фильтров, которые смотрят только на имя сайта."
-          checked={tgSettings.allowFronting}
-          onChange={(v) => setTgSettings({ allowFronting: v })}
-        />
-      </div>
-
-      {/* Счётчики */}
-      {tgProxy.running && (
-        <div className={`p-4 rounded-xl border space-y-3 ${card}`}>
-          <div className="text-xs font-bold">Что происходит</div>
-
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-5 gap-2 text-center">
             {[
-              { label: 'Веб-транспорт', value: s.ws, tone: 'text-emerald-500' },
-              { label: 'Запасной узел', value: s.cf, tone: 'text-indigo-500' },
-              { label: 'Напрямую', value: s.tcp, tone: 'text-amber-500' },
-              { label: 'Не прошло', value: s.failed, tone: s.failed > 0 ? 'text-rose-500' : 'text-slate-400' },
-              { label: 'Отвергнуто', value: s.bad, tone: s.bad > 0 ? 'text-amber-500' : 'text-slate-400' }
+              { label: 'Веб-транспорт', value: s.ws, tone: s.ws > 0 ? 'text-green-400' : 'text-t1' },
+              { label: 'Запасной узел', value: s.cf, tone: 'text-t1' },
+              { label: 'Напрямую', value: s.tcp, tone: 'text-t1' },
+              { label: 'Не прошло', value: s.failed, tone: s.failed > 0 ? 'text-red-400' : 'text-t1' },
+              { label: 'Отвергнуто', value: s.bad, tone: s.bad > 0 ? 'text-amber-400' : 'text-t1' }
             ].map(item => (
-              <div key={item.label} className="p-2.5 rounded-lg bg-black/[0.02] dark:bg-white/[0.02] border border-black/5 dark:border-white/5">
-                <div className="text-[10px] text-slate-500 dark:text-slate-400">{item.label}</div>
-                <div className={`text-lg font-bold leading-tight ${item.tone}`}>{item.value}</div>
+              <div key={item.label} className="p-2 rounded-[8px] bg-s2 flex flex-col justify-between">
+                <div className="text-[11px] text-t2 leading-tight">{item.label}</div>
+                <div className={`text-[14px] font-mono font-semibold ${item.tone}`}>{item.value}</div>
               </div>
             ))}
           </div>
-
-          <div className="flex items-center gap-4 text-[11px] text-slate-500 dark:text-slate-400 pt-1">
-            <span className="flex items-center gap-1.5">
-              <ArrowUp className="w-3.5 h-3.5 text-indigo-500" />
-              Отправлено: <span className="font-mono text-slate-700 dark:text-slate-200">{formatBytes(s.bytesUp)}</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-500" />
-              Получено: <span className="font-mono text-slate-700 dark:text-slate-200">{formatBytes(s.bytesDown)}</span>
-            </span>
-            <span>Всего соединений: <span className="font-mono text-slate-700 dark:text-slate-200">{s.total}</span></span>
+          <div className="flex items-center gap-4 text-[11px] text-t2">
+            <span className="flex items-center gap-1.5"><ArrowUp className="w-3.5 h-3.5 text-ac" />Отправлено: <span className="font-mono text-t1">{formatBytes(s.bytesUp)}</span></span>
+            <span className="flex items-center gap-1.5"><ArrowDown className="w-3.5 h-3.5 text-green-500" />Получено: <span className="font-mono text-t1">{formatBytes(s.bytesDown)}</span></span>
           </div>
+          {tgProxy.running && s.ws === 0 && s.cf === 0 && s.tcp > 0 && (
+            <Note tone="warn">Всё идёт напрямую, обход не понадобился: дата-центры Telegram у вашего провайдера открыты, и мост вам, скорее всего, не нужен.</Note>
+          )}
+          {tgProxy.running && s.cf > 0 && (
+            <Note tone="accent">Соединения идут через запасной узел — прямые адреса Telegram у вас закрыты, и мост делает ровно ту работу, ради которой он здесь.</Note>
+          )}
+          {tgProxy.running && s.failed > 0 && s.ws === 0 && s.cf === 0 && s.tcp === 0 && (
+            <Note tone="bad">Ни одно соединение не дошло. Подробности — в «Журнале», источник TgProxy: там видно, на каком шаге обрывается.</Note>
+          )}
+        </Card>
 
-          {s.ws === 0 && s.cf === 0 && s.tcp > 0 && (
-            <p className="text-[11px] text-amber-500 leading-snug">
-              Всё идёт напрямую, обход не понадобился. Значит дата-центры Telegram у вашего
-              провайдера открыты и мост вам, скорее всего, не нужен.
-            </p>
-          )}
-          {s.cf > 0 && (
-            <p className="text-[11px] text-indigo-500 leading-snug">
-              Соединения идут через запасной узел — прямые адреса Telegram у вас закрыты,
-              и мост делает ровно ту работу, ради которой он здесь.
-            </p>
-          )}
-          {s.failed > 0 && s.ws === 0 && s.cf === 0 && s.tcp === 0 && (
-            <p className="text-[11px] text-rose-500 leading-snug">
-              Ни одно соединение не дошло. Подробности — во вкладке «Консоль логов»,
-              источник TgProxy: там видно, на каком шаге обрывается.
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Пояснение */}
-      <div className={`p-4 rounded-xl border space-y-2 ${card}`}>
-        <div className="flex items-center gap-2">
-          <Info className="w-4 h-4 text-slate-400" />
-          <span className="text-xs font-bold">Почему Telegram лечится отдельно</span>
-        </div>
-        <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-          YouTube и Discord режут по содержимому: фильтр разбирает начало соединения и
-          решает, пропускать ли его. Против этого и работает обход — он меняет форму
-          первых пакетов. Telegram закрывают иначе: обрывают маршрут до подсетей
-          дата-центров, и соединение не устанавливается вовсе. Резать нечего, поэтому
-          профиль Telegram убран из ядра ещё в версии 0.1.5.
-        </p>
-        <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
-          Мост решает задачу с другой стороны: он принимает от клиента обычный MTProto
-          и выводит его по WebSocket, как это делает веб-версия Telegram. Сами серверы
-          веб-версии стоят в тех же закрытых подсетях, поэтому на заблокированной сети
-          соединение идёт через запасной узел: у него чужой адрес, к которому претензий
-          нет, и снаружи это выглядит как обычный заход на сайт.
-        </p>
+        {/* Пояснение */}
+        <Card className="col-span-5 p-4 space-y-1.5">
+          <div className="text-[13px] font-semibold text-t1">Почему Telegram лечится отдельно</div>
+          <p className="text-[12px] leading-relaxed text-t2">
+            YouTube и Discord режут по содержимому — против этого работает обход. Telegram закрывают по
+            адресам: соединение с дата-центрами не устанавливается вовсе, резать нечего.
+          </p>
+          <p className="text-[12px] leading-relaxed text-t2">
+            Мост принимает от клиента обычный MTProto и выводит его по WebSocket, как веб-версия Telegram,
+            а на закрытой сети — через запасной узел с чужим адресом.
+          </p>
+        </Card>
       </div>
+
+      {/* Настройки */}
+      <Card className="p-3.5">
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          className="w-full flex items-center justify-between text-[13px] font-semibold text-t1"
+        >
+          <span>Настройки моста (порт {tgSettings.port}, секрет и режимы)</span>
+          {settingsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {settingsOpen && (
+          <div className="mt-3 pt-3 space-y-2 border-t border-line">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-3 px-3 py-2 rounded-[8px] bg-s2 border border-line">
+                <div className="p-1.5 rounded-[7px] bg-ac/15 text-ac-300 shrink-0"><Network className="w-3.5 h-3.5" /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-t1">Порт</div>
+                  <div className="text-[11px] text-t2 leading-snug">Менять, только если 1443 занят</div>
+                </div>
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={portDraft}
+                  onChange={(e) => setPortDraft(e.target.value)}
+                  onBlur={commitPort}
+                  onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+                  className="ui-input w-24 px-2.5 py-1.5 text-[12px] font-mono text-center shrink-0"
+                />
+              </div>
+
+              <div className="flex items-center gap-3 px-3 py-2 rounded-[8px] bg-s2 border border-line">
+                <div className="p-1.5 rounded-[7px] bg-ac/15 text-ac-300 shrink-0"><KeyRound className="w-3.5 h-3.5" /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[12px] font-medium text-t1">Секрет</div>
+                  <button
+                    type="button"
+                    onClick={() => setSecretShown(v => !v)}
+                    title="Показать или скрыть. Он уже внутри ссылки — отдельно вводить не нужно."
+                    className="font-mono text-[11px] text-t2 hover:text-ac-300 break-all text-left"
+                  >
+                    {secretShown ? tgSettings.secret : maskedSecret}
+                  </button>
+                </div>
+                <Button variant="secondary" size="sm" icon={RefreshCw} onClick={regenerateTgSecret} title="Прежняя ссылка перестанет работать">
+                  Сменить
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <SwitchRow
+                icon={Power}
+                title="Запускать вместе с программой"
+                hint="Мост поднимется сам при старте. Порт при этом открывается без вашего участия."
+                checked={tgSettings.autoStart}
+                onChange={(v) => setTgSettings({ autoStart: v })}
+              />
+              <SwitchRow
+                icon={Wifi}
+                title="Доступ из локальной сети"
+                hint="Подключатся телефон и другие устройства в сети. Порт виден всем соседям — защищает только секрет."
+                checked={tgSettings.lanAccess}
+                onChange={(v) => setTgSettings({ lanAccess: v })}
+                warn
+              />
+              <SwitchRow
+                icon={Cloud}
+                title="Обход через запасные узлы"
+                hint="Если адреса Telegram закрыты подсетями — а обычно так и есть. Узел видит ваш адрес и объём, но не содержимое: переписка зашифрована самим Telegram."
+                checked={tgSettings.allowCloudflare}
+                onChange={(v) => setTgSettings({ allowCloudflare: v })}
+              />
+              <SwitchRow
+                icon={Network}
+                title="Прямое соединение как резерв"
+                hint="Обычный MTProto прямо к дата-центру, если веб-транспорт не прошёл. Помогает там, где Telegram не закрыт."
+                checked={tgSettings.allowDirectTcp}
+                onChange={(v) => setTgSettings({ allowDirectTcp: v })}
+              />
+              <SwitchRow
+                icon={ShieldAlert}
+                title="Повтор с чужим именем в TLS"
+                hint="Если рукопожатие с kws*.web.telegram.org не проходит, мост повторит с посторонним именем. Адресат не меняется."
+                checked={tgSettings.allowFronting}
+                onChange={(v) => setTgSettings({ allowFronting: v })}
+              />
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-[8px] border border-dashed border-line text-[11px] text-t3">
+                <Send className="w-3.5 h-3.5 shrink-0" />
+                Изменения применяются сразу: работающий мост перезапустится сам.
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 };

@@ -31,7 +31,7 @@ import {
   strategiesFor
 } from '../lib/zapretCommand';
 import { summarizeAutotune, AutotuneVerdictKind } from '../lib/autotune';
-import { applyTheme, getBackground, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
+import { applyTheme, shrinkImage, averageHueOfImage, nearestAccent } from '../lib/theme';
 import { loadSetting, saveSetting, removeSetting } from '../lib/settings';
 import {
   buildTgLink,
@@ -47,7 +47,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.4.2';
+export const APP_VERSION = '0.4.3-test';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -314,6 +314,9 @@ export interface AutoPresetState {
   applied: boolean;
 }
 
+/** Вкладка экрана «Подбор». */
+export type AutotuneTab = StrategyGroup | 'preset';
+
 interface AppContextType {
   status: AppStatus;
   activeTab: TabType;
@@ -375,6 +378,9 @@ interface AppContextType {
   startAutoPreset: () => void;
   applyAutoPreset: () => void;
   undoAutoPreset: () => void;
+  /** Вкладка экрана «Подбор»: весь пресет или одна группа. */
+  autotuneTab: AutotuneTab;
+  setAutotuneTab: (t: AutotuneTab) => void;
   /** Модалка автоподбора открывается и с главной, и из «Пресетов». */
   isAutotuneModalOpen: boolean;
   setIsAutotuneModalOpen: (open: boolean) => void;
@@ -460,25 +466,21 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [status, setStatus] = useState<AppStatus>('disconnected');
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
-  const [theme, setTheme] = useState<ThemeMode>(
-    () => (loadSetting('zapret2_theme_v5') as ThemeMode) || 'dark'
-  );
+  // С 0.4.3 светлой темы нет: режим всегда тёмный, а выбор «Чёрная» или
+  // «Тёмная» живёт в background. Сохранённое «light» из прошлых версий
+  // молча становится тёмным — на нём держатся проверки theme === 'dark'
+  // в старых компонентах.
+  const [theme, setThemeState] = useState<ThemeMode>('dark');
+  const setTheme = (_m: ThemeMode) => setThemeState('dark');
   const [accent, setAccentState] = useState<string>(
-    () => loadSetting(THEME_ACCENT_KEY) || 'indigo'
+    () => loadSetting(THEME_ACCENT_KEY) || 'violet'
   );
   const [background, setBackgroundState] = useState<string>(
-    () => loadSetting(THEME_BG_KEY) || 'slate'
+    () => loadSetting(THEME_BG_KEY) || 'black'
   );
   const [customBackground, setCustomBackgroundState] = useState<string>(
     () => loadSetting(THEME_IMAGE_KEY) || ''
   );
-  const [customTint, setCustomTint] = useState<{ hue: number; sat: number }>(() => {
-    try {
-      const raw = loadSetting(THEME_TINT_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch { }
-    return { hue: 217, sat: 1 };
-  });
   const [closeBehavior, setCloseBehaviorState] = useState<CloseBehavior>(
     () => (loadSetting('zapret2_close_v5') as CloseBehavior) || 'minimize_to_tray'
   );
@@ -663,7 +665,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [preflight, setPreflight] = useState<PreflightItem[]>([]);
   const [autotuneRows, setAutotuneRows] = useState<AutotuneRow[]>([]);
   const [isAutotuneRunning, setIsAutotuneRunning] = useState(false);
-  const [isAutotuneModalOpen, setIsAutotuneModalOpen] = useState(false);
+  // С 0.4.3 подбор — отдельный экран. Прежний интерфейс «открыть окно
+  // подбора» сохранён: его зовут выбор стратегии, главная и мастер.
+  const isAutotuneModalOpen = activeTab === 'autotune';
+  // «Весь пресет» — рекомендуемый путь, с него экран и открывается. Выбор
+  // стратегии конкретной группы ставит свою вкладку перед переходом.
+  const [autotuneTab, setAutotuneTab] = useState<AutotuneTab>('preset');
+  const setIsAutotuneModalOpen = (open: boolean) => { if (open) setActiveTab('autotune'); };
   const [autotuneGroup, setAutotuneGroup] = useState<StrategyGroup>('youtube');
   const [autoPreset, setAutoPreset] = useState<AutoPresetState>({ stage: 'idle', applied: false });
   // Вердикты последнего подбора по группам. Случай 2026-10-12: подбор нашёл
@@ -962,24 +970,20 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     addLog('warn', `Пресет удален`, 'Presets');
   };
 
-  const toggleTheme = () => {
-    setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
-  };
+  // Светлой темы нет — переключать нечего. Оставлено ради совместимости.
+  const toggleTheme = () => setThemeState('dark');
 
   const setAccent = (id: string) => {
     saveSetting(THEME_ACCENT_KEY, id);
     setAccentState(id);
   };
 
-  // Смена фона тянет за собой акцент: у каждого фона есть тот, что к нему
-  // подходит. Иначе «Багрянец» с индиговыми кнопками выглядит случайностью.
+  // Тема — «Чёрная» или «Тёмная». Обе нейтральные, поэтому акцент, в
+  // отличие от прежних цветных фонов, за собой не тянут.
   const setBackground = (id: string) => {
     saveSetting(THEME_BG_KEY, id);
     setBackgroundState(id);
-    const def = getBackground(id);
-    saveSetting(THEME_ACCENT_KEY, def.accent);
-    setAccentState(def.accent);
-    // Пресет и картинка — взаимоисключающие: выбрали пресет, картинка уходит.
+    // Тема и картинка — взаимоисключающие: выбрали тему, картинка уходит.
     if (customBackground) {
       removeSetting(THEME_IMAGE_KEY);
       setCustomBackgroundState('');
@@ -992,13 +996,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const tint = await averageHueOfImage(dataUrl);
       try {
         saveSetting(THEME_IMAGE_KEY, dataUrl);
-        saveSetting(THEME_TINT_KEY, JSON.stringify(tint));
       } catch {
         // Картинка может не влезть в localStorage — она там не одна.
         addLog('warn', 'Фон применён, но не сохранится до следующего запуска: не хватило места в хранилище.', 'Theme');
       }
       setCustomBackgroundState(dataUrl);
-      setCustomTint(tint);
 
       // Акцент подтягиваем к тону картинки — иначе оранжевый фон с изумрудными
       // кнопками выглядит так, будто фон подставили случайно.
@@ -1006,7 +1008,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       saveSetting(THEME_ACCENT_KEY, suggested);
       setAccentState(suggested);
 
-      addLog('success', `Фон заменён на изображение, тон интерфейса подобран по нему (${tint.hue}°).`, 'Theme');
+      addLog('success', `Фон заменён на изображение, акцент подобран по его тону (${tint.hue}°).`, 'Theme');
     } catch (e: any) {
       addLog('error', 'Не удалось поставить фон: ' + (e?.message || e), 'Theme');
     }
@@ -1022,16 +1024,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // сохранённый выбор держим здесь же, иначе тема сбрасывалась при
   // перезапуске и рассинхронизировалась с разметкой.
   useEffect(() => {
-    applyTheme({
-      mode: theme,
-      accent,
-      background,
-      customImage: customBackground,
-      customHue: customTint.hue,
-      customSat: customTint.sat
-    });
-    saveSetting('zapret2_theme_v5', theme);
-  }, [theme, accent, background, customBackground, customTint]);
+    applyTheme({ accent, background, customImage: customBackground });
+    saveSetting('zapret2_theme_v5', 'dark');
+  }, [accent, background, customBackground]);
 
   const addLog = (level: LogEntry['level'], message: string, source: string = 'Core') => {
     const now = new Date();
@@ -1471,8 +1466,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setAutoPreset(prev => ({ ...prev, stage: 'done', verify }));
       addLog(verify && verify.ok ? 'success' : 'warn',
         verify && verify.ok
-          ? 'Сборка пресета: собранная команда прошла все пробы. Примените её в окне подбора.'
-          : 'Сборка пресета: собранная команда целиком прошла не все пробы — см. окно подбора.',
+          ? 'Сборка пресета: собранная команда прошла все пробы. Примените её на экране «Подбор».'
+          : 'Сборка пресета: собранная команда целиком прошла не все пробы — см. экран «Подбор».',
         'Autotune');
     }
   }, [isAutotuneRunning]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1970,6 +1965,8 @@ const parseReleaseHighlights = (body: string): string[] => {
         undoAutoPreset,
         isAutotuneModalOpen,
         setIsAutotuneModalOpen,
+        autotuneTab,
+        setAutotuneTab,
         logs,
         addLog,
         clearLogs,

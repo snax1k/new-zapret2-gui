@@ -1,7 +1,7 @@
 import React from 'react';
-import { Power, ShieldCheck, ShieldAlert, Loader2, Sparkles, AlertTriangle } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { Power, RefreshCw, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { formatUptimeShort } from './Sidebar';
 
 /**
  * Через сколько секунд работы отсутствие вмешательств считается подозрительным.
@@ -10,145 +10,117 @@ import { useApp } from '../context/AppContext';
  */
 const IDLE_ALERT_AFTER_SEC = 60;
 
-export const PowerButton: React.FC = () => {
-  const { status, toggleStatus, stats, quickToggles, setActiveTab, theme } = useApp();
+/**
+ * Главный блок: кнопка питания, состояние словами и, когда обход работает,
+ * три показателя. Отвечает на вопрос «работает ли сейчас» за секунду —
+ * цветом, иконкой и текстом одновременно.
+ */
+export const PowerButton: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
+  const { status, toggleStatus, stats, quickToggles } = useApp();
 
-  const formatUptime = (totalSeconds: number) => {
-    const hrs = Math.floor(totalSeconds / 3600);
-    const mins = Math.floor((totalSeconds % 3600) / 60);
-    const secs = totalSeconds % 60;
-    return `${hrs > 0 ? `${hrs}:` : ''}${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const isConnected = status === 'connected';
+  const isOn = status === 'connected';
   const isConnecting = status === 'connecting';
+  const isError = status === 'error';
+  const isOff = !isOn && !isConnecting && !isError;
+
+  // Счётчики берутся из вывода ядра, а он есть только с --debug. Без него
+  // метрика недоступна, а не равна нулю.
+  const canCount = quickToggles.verboseLog;
 
   // Ядро живо, но за минуту не вмешалось ни разу. Почти всегда это значит,
-  // что до winws просто не доходит трафик: системный прокси уводит HTTP(S)
-  // в loopback, поднят VPN, или списки не покрывают то, что открывают.
-  // Без --debug ядро таких строк не печатает, и судить не о чем.
-  const idle =
-    isConnected &&
-    quickToggles.verboseLog &&
-    stats.desyncCount === 0 &&
-    stats.uptimeSeconds >= IDLE_ALERT_AFTER_SEC;
+  // что трафик до winws не доходит: системный прокси уводит HTTP(S) в
+  // loopback, поднят VPN, или списки не покрывают то, что открывают.
+  const idle = isOn && canCount && stats.desyncCount === 0 && stats.uptimeSeconds >= IDLE_ALERT_AFTER_SEC;
+
+  const size = compact ? 'w-[86px] h-[86px]' : 'w-[112px] h-[112px]';
+  const iconSize = compact ? 'w-6 h-6' : 'w-7 h-7';
 
   return (
-    <div className="flex flex-col items-center justify-center select-none">
-      {/* Outer Pulse Container */}
-      <div className="relative flex items-center justify-center">
-        {/* Animated Background Rings when Connected */}
-        {isConnected && (
-          <>
-            <motion.div
-              initial={{ scale: 0.8, opacity: 0.8 }}
-              animate={{ scale: [1, 1.35, 1], opacity: [0.35, 0, 0.35] }}
-              transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
-              className="absolute w-48 h-48 rounded-full bg-emerald-500/20 blur-xl pointer-events-none"
-            />
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0.5 }}
-              animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0.1, 0.5] }}
-              transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut', delay: 0.4 }}
-              className="absolute w-44 h-44 rounded-full border-2 border-emerald-500/30 pointer-events-none"
-            />
-          </>
-        )}
+    <div
+      className={`rounded-[14px] ${compact ? 'p-3.5' : 'p-5'} flex flex-col items-center text-center bg-s1 border ${
+        isOn ? (idle ? 'border-amber-500/[0.28]' : 'border-green-500/[0.28]')
+          : isError ? 'border-red-500/[0.28]' : 'border-line'
+      }`}
+      style={{
+        backgroundImage: isOn
+          ? `radial-gradient(circle at 50% 0%, ${idle ? 'rgba(245,158,11,0.09)' : 'rgba(34,197,94,0.11)'}, transparent 70%)`
+          : isConnecting
+            ? 'radial-gradient(circle at 50% 0%, rgba(245,158,11,0.09), transparent 70%)'
+            : isError
+              ? 'radial-gradient(circle at 50% 0%, rgba(239,68,68,0.08), transparent 70%)'
+              : 'none'
+      }}
+    >
+      <button
+        type="button"
+        onClick={toggleStatus}
+        disabled={isConnecting}
+        title={isOn ? 'Выключить обход' : 'Включить обход'}
+        className={`${size} rounded-full flex flex-col items-center justify-center transition-all duration-300 select-none border-2 hover:brightness-110 active:scale-[0.98] ${
+          isOn
+            ? 'bg-green-500/[0.14] border-green-500 shadow-[0_0_36px_rgba(34,197,94,0.26),inset_0_0_16px_rgba(34,197,94,0.14)]'
+            : isConnecting
+              ? 'bg-amber-500/[0.12] border-amber-500'
+              : isError
+                ? 'bg-red-500/[0.10] border-red-500/70'
+                : 'bg-s2 border-line-strong shadow-[0_8px_24px_rgba(0,0,0,0.35)] hover:border-ac/60'
+        }`}
+      >
+        {isConnecting
+          ? <RefreshCw className={`${iconSize} text-amber-500 animate-spin mb-1`} />
+          : <Power className={`${iconSize} mb-1 ${isOn ? 'text-green-500' : isError ? 'text-red-400' : 'text-t1'}`} />}
+        <span className={`text-[12px] font-semibold ${isOn ? 'text-green-400' : isConnecting ? 'text-amber-400' : isError ? 'text-red-300' : 'text-t1'}`}>
+          {isOn ? 'Включено' : isConnecting ? 'Подключение…' : isError ? 'Повторить' : 'Включить'}
+        </span>
+      </button>
 
-        {/* Loading Spinner Ring when Connecting */}
-        {isConnecting && (
-          <motion.div
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
-            className="absolute w-44 h-44 rounded-full border-2 border-dashed border-amber-400/60 pointer-events-none"
-          />
-        )}
-
-        {/* The Main Power Button */}
-        <motion.button
-          whileHover={{ scale: 1.04 }}
-          whileTap={{ scale: 0.96 }}
-          onClick={toggleStatus}
-          disabled={isConnecting}
-          className={`relative z-10 w-36 h-36 rounded-full flex flex-col items-center justify-center transition-all duration-500 shadow-2xl group ${
-            isConnected
-              ? 'bg-gradient-to-b from-emerald-500 to-emerald-700 text-white shadow-emerald-500/40 border-2 border-emerald-300/40'
-              : isConnecting
-              ? 'bg-gradient-to-b from-amber-500 to-amber-700 text-white shadow-amber-500/30 border-2 border-amber-300/30'
-              : theme === 'dark'
-              ? 'bg-gradient-to-b from-slate-800 to-slate-900 text-slate-400 hover:text-white shadow-black/60 border-2 border-white/10 hover:border-indigo-500/40 hover:shadow-indigo-500/20'
-              : 'bg-gradient-to-b from-slate-100 to-slate-200 text-slate-500 hover:text-slate-900 shadow-slate-300/60 border-2 border-slate-300 hover:border-indigo-400 hover:shadow-indigo-200'
-          }`}
-        >
-          {/* Inner Gloss */}
-          <div className="absolute inset-1 rounded-full bg-gradient-to-b from-white/20 to-transparent pointer-events-none" />
-
-          {/* Icon */}
-          <div className="relative">
-            {isConnecting ? (
-              <Loader2 className="w-12 h-12 animate-spin text-white" />
-            ) : isConnected ? (
-              <Power className="w-12 h-12 drop-shadow-[0_0_12px_rgba(255,255,255,0.7)] text-white" />
-            ) : (
-              <Power className="w-12 h-12 transition-transform duration-300 group-hover:scale-110" />
-            )}
-          </div>
-
-          <span className="mt-1 text-[11px] font-bold tracking-wider uppercase">
-            {isConnecting ? 'Запуск' : isConnected ? 'ВКЛ' : 'ВКЛЮЧИТЬ'}
-          </span>
-        </motion.button>
+      <div className="mt-3 flex items-center gap-2">
+        {isOn && !idle && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+        {idle && <AlertTriangle className="w-4 h-4 text-amber-500" />}
+        {isConnecting && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
+        {isError && <XCircle className="w-4 h-4 text-red-500" />}
+        {isOff && <span className="w-2.5 h-2.5 rounded-full bg-t3" />}
+        <h2 className="text-[15px] font-semibold text-t1">
+          {idle ? 'Ядро работает, но трафик через него не идёт'
+            : isOn ? 'Обход работает'
+            : isConnecting ? 'Подключение…'
+            : isError ? 'Ядро не запустилось'
+            : 'Обход выключен — трафик идёт как обычно'}
+        </h2>
       </div>
 
-      {/* Status Details under the button */}
-      <div className="mt-5 text-center space-y-1">
-        <div className="flex items-center justify-center gap-2">
-          {idle ? (
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-bold">
-              <AlertTriangle className="w-4 h-4" />
-              <span>ЯДРО ЗАПУЩЕНО, ТРАФИК НЕ ОБРАБАТЫВАЕТСЯ</span>
+      <p className="text-[12px] mt-0.5 text-t2">
+        {idle
+          ? `За ${Math.floor(stats.uptimeSeconds / 60)} мин ни одного вмешательства — смотрите «Проверку компьютера» ниже`
+          : isOn ? formatUptimeShort(stats.uptimeSeconds)
+          : isConnecting ? 'Запускается фильтр трафика от имени администратора…'
+          : isError ? (stats.driverStatus || 'Причина — в «Журнале». Нажмите кнопку, чтобы попробовать ещё раз.')
+          : 'Нажмите кнопку, чтобы Discord и YouTube открывались без ограничений'}
+      </p>
+
+      {isOn && (
+        <div className="grid grid-cols-3 gap-2.5 w-full mt-3.5 pt-3 border-t border-line">
+          <div className="rounded-[9px] px-3 py-1.5 text-left bg-s2">
+            <div className="text-[11px] text-t2">Обработано соединений</div>
+            <div className={`text-[13px] font-semibold font-mono ${idle ? 'text-amber-400' : 'text-t1'}`}>
+              {canCount ? stats.desyncCount.toLocaleString('ru-RU') : 'н/д'}
             </div>
-          ) : isConnected ? (
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs font-bold">
-              <ShieldCheck className="w-4 h-4" />
-              <span>ЗАЩИТА И ОБХОД АКТИВНЫ</span>
+            {!canCount && <div className="text-[10px] text-t3">нужен подробный журнал</div>}
+          </div>
+          <div className="rounded-[9px] px-3 py-1.5 text-left bg-s2">
+            <div className="text-[11px] text-t2">Сайтов распознано</div>
+            <div className="text-[13px] font-semibold font-mono text-t1">
+              {canCount ? stats.hostCount.toLocaleString('ru-RU') : 'н/д'}
             </div>
-          ) : isConnecting ? (
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 text-xs font-bold animate-pulse">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>ПОДКЛЮЧЕНИЕ К ДРАЙВЕРУ...</span>
+          </div>
+          <div className="rounded-[9px] px-3 py-1.5 text-left bg-s2 min-w-0">
+            <div className="text-[11px] text-t2">Ядро</div>
+            <div className="text-[12px] font-medium text-green-400 truncate">
+              работает · PID {stats.pid || '—'} · профилей {stats.activeRulesCount}
             </div>
-          ) : (
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-slate-500 dark:text-slate-400 text-xs font-medium">
-              <ShieldAlert className="w-4 h-4 text-slate-400" />
-              <span>ОТКЛЮЧЕНО (ОБЫЧНЫЙ ТРАФИК)</span>
-            </div>
-          )}
+          </div>
         </div>
-
-        {idle && (
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className="text-[11px] text-amber-600 dark:text-amber-400 hover:underline pt-0.5"
-          >
-            За {Math.floor(stats.uptimeSeconds / 60)} мин ни одного вмешательства —
-            смотрите проверку окружения выше
-          </button>
-        )}
-
-        {isConnected ? (
-          <div className="flex items-center justify-center gap-3 text-xs text-slate-500 dark:text-slate-400 font-mono pt-1">
-            <span>Время: <strong className={idle ? 'text-amber-600 dark:text-amber-300' : 'text-emerald-600 dark:text-emerald-300'}>{formatUptime(stats.uptimeSeconds)}</strong></span>
-            <span>•</span>
-            <span>winws: <strong className="text-slate-800 dark:text-slate-200">PID {stats.pid || '—'}</strong></span>
-          </div>
-        ) : (
-          <p className="text-xs text-slate-500 dark:text-slate-400 flex items-center justify-center gap-1 pt-1">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-            Нажмите кнопку для активации десинхронизации DPI
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 };

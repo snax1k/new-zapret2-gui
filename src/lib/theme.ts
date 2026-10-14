@@ -1,15 +1,19 @@
 /**
  * Цветовая схема приложения.
  *
- * Интерфейс написан обычными классами Tailwind: акцент — `indigo-*`,
- * поверхности и текст — `slate-*`. Таких мест почти девятьсот, менять их
- * руками нельзя. Поэтому в `tailwind.config.js` обе палитры объявлены через
- * CSS-переменные, а здесь эти переменные считаются и подставляются в
- * `<html>`. Ни один компонент об этом не знает и знать не должен.
+ * С 0.4.3 оформление только тёмное, в двух вариантах: «Чёрная» (чистый
+ * чёрный, для OLED) и «Тёмная» (графит). Токены взяты из дизайн-системы
+ * редизайна (New Design/zapret2_control_center.tsx).
  *
- * Переменные хранятся в формате «R G B» без функции rgb() — так работает
- * модификатор прозрачности Tailwind: `bg-indigo-600/20` превращается в
- * `rgb(var(--accent-600) / 0.2)`.
+ * Как это доходит до разметки. Старые компоненты написаны классами Tailwind
+ * `indigo-*` (акцент) и `slate-*` (поверхности и текст) — таких мест почти
+ * девятьсот, поэтому в `tailwind.config.js` обе палитры объявлены через
+ * CSS-переменные, а здесь эти переменные подставляются в `<html>`. Новые
+ * компоненты пользуются токенами напрямую: `bg-app`, `bg-s1..s3`,
+ * `text-t1..t3`, `border-line`, `bg-ac`.
+ *
+ * Формат переменных «R G B» без rgb() — так работает модификатор
+ * прозрачности Tailwind: `bg-ac/15` превращается в `rgb(var(--accent-500) / 0.15)`.
  */
 
 export type ThemeMode = 'dark' | 'light';
@@ -19,11 +23,18 @@ const STOPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950] as const;
 
 export type Ramp = Record<number, [number, number, number]>;
 
+const hexToRgb = (hex: string): [number, number, number] => {
+  const h = hex.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16)];
+};
+
+const ramp = (hexes: string[]): Ramp => {
+  const out: Ramp = {};
+  STOPS.forEach((stop, i) => { out[stop] = hexToRgb(hexes[i]); });
+  return out;
+};
+
 // --- Акценты ----------------------------------------------------------
-//
-// Палитры взяты у Tailwind целиком, а не выведены из одного тона: подобранные
-// вручную ряды выглядят ровно, а рассчитанные из чистого HSL уходят в грязь на
-// средних ступенях. Здесь важнее предсказуемость, чем экономия строк.
 
 export interface AccentDef {
   id: string;
@@ -31,166 +42,105 @@ export interface AccentDef {
   /** Цвет кружка в настройках — 500-я ступень. */
   swatch: string;
   ramp: Ramp;
+  /** Тон в градусах — для подбора акцента под картинку фона. */
+  hue: number;
 }
-
-const ramp = (hexes: string[]): Ramp => {
-  const out: Ramp = {};
-  STOPS.forEach((stop, i) => {
-    const h = hexes[i].replace('#', '');
-    out[stop] = [
-      parseInt(h.slice(0, 2), 16),
-      parseInt(h.slice(2, 4), 16),
-      parseInt(h.slice(4, 6), 16)
-    ];
-  });
-  return out;
-};
 
 export const ACCENTS: AccentDef[] = [
   {
-    id: 'indigo',
-    label: 'Индиго',
-    swatch: '#6366f1',
-    ramp: ramp(['#eef2ff', '#e0e7ff', '#c7d2fe', '#a5b4fc', '#818cf8', '#6366f1',
-                '#4f46e5', '#4338ca', '#3730a3', '#312e81', '#1e1b4b'])
+    // Акцент редизайна: #7C6CFF на 500-й ступени, остальное — вокруг него.
+    id: 'violet',
+    label: 'Фиолетово-синий',
+    swatch: '#7C6CFF',
+    hue: 247,
+    ramp: ramp(['#F3F1FF', '#E8E5FF', '#D3CDFF', '#B5ABFF', '#9A8DFF', '#7C6CFF',
+                '#6A57F5', '#5A45DB', '#4A39B3', '#3D318C', '#241C55'])
+  },
+  {
+    id: 'blue',
+    label: 'Синий',
+    swatch: '#3B82F6',
+    hue: 217,
+    ramp: ramp(['#eff6ff', '#dbeafe', '#bfdbfe', '#93c5fd', '#60a5fa', '#3b82f6',
+                '#2563eb', '#1d4ed8', '#1e40af', '#1e3a8a', '#172554'])
+  },
+  {
+    id: 'cyan',
+    label: 'Бирюзовый',
+    swatch: '#06B6D4',
+    hue: 189,
+    ramp: ramp(['#ecfeff', '#cffafe', '#a5f3fc', '#67e8f9', '#22d3ee', '#06b6d4',
+                '#0891b2', '#0e7490', '#155e75', '#164e63', '#083344'])
   },
   {
     id: 'red',
     label: 'Красный',
-    swatch: '#ef4444',
-    ramp: ramp(['#fef2f2', '#fee2e2', '#fecaca', '#fca5a5', '#f87171', '#ef4444',
-                '#dc2626', '#b91c1c', '#991b1b', '#7f1d1d', '#450a0a'])
-  },
-  {
-    id: 'emerald',
-    label: 'Изумруд',
-    swatch: '#10b981',
-    ramp: ramp(['#ecfdf5', '#d1fae5', '#a7f3d0', '#6ee7b7', '#34d399', '#10b981',
-                '#059669', '#047857', '#065f46', '#064e3b', '#022c22'])
-  },
-  {
-    id: 'amber',
-    label: 'Янтарь',
-    swatch: '#f59e0b',
-    ramp: ramp(['#fffbeb', '#fef3c7', '#fde68a', '#fcd34d', '#fbbf24', '#f59e0b',
-                '#d97706', '#b45309', '#92400e', '#78350f', '#451a03'])
-  },
-  {
-    id: 'violet',
-    label: 'Фиолетовый',
-    swatch: '#8b5cf6',
-    ramp: ramp(['#f5f3ff', '#ede9fe', '#ddd6fe', '#c4b5fd', '#a78bfa', '#8b5cf6',
-                '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95', '#2e1065'])
-  },
-  {
-    id: 'cyan',
-    label: 'Бирюза',
-    swatch: '#06b6d4',
-    ramp: ramp(['#ecfeff', '#cffafe', '#a5f3fc', '#67e8f9', '#22d3ee', '#06b6d4',
-                '#0891b2', '#0e7490', '#155e75', '#164e63', '#083344'])
+    swatch: '#F43F5E',
+    hue: 350,
+    ramp: ramp(['#fff1f2', '#ffe4e6', '#fecdd3', '#fda4af', '#fb7185', '#f43f5e',
+                '#e11d48', '#be123c', '#9f1239', '#881337', '#4c0519'])
   }
 ];
 
+/**
+ * Акцент по id. Неизвестные — это выбор из прежних версий (индиго, изумруд,
+ * янтарь): у них нет пары в новой палитре, поэтому — акцент по умолчанию.
+ */
 export const getAccent = (id: string): AccentDef =>
   ACCENTS.find(a => a.id === id) || ACCENTS[0];
 
-/** Тон каждого акцента в градусах — для подбора акцента под картинку. */
-const ACCENT_HUE: Record<string, number> = {
-  indigo: 239,
-  red: 0,
-  emerald: 160,
-  amber: 38,
-  violet: 258,
-  cyan: 189
-};
-
-/**
- * Акцент, ближайший к заданному тону.
- *
- * Нужен, когда фоном ставят свою картинку: оставлять при оранжевом снимке
- * изумрудные кнопки — это ровно та несогласованность, ради которой тему и
- * подстраивают под фон. Расстояние считается по кругу, иначе 350° и 10°
- * оказались бы противоположными.
- */
+/** Акцент, ближайший к заданному тону — когда фоном ставят свою картинку. */
 export const nearestAccent = (hue: number): string => {
-  let best = 'indigo';
+  let best = ACCENTS[0].id;
   let bestDist = 999;
-  Object.keys(ACCENT_HUE).forEach(id => {
-    // |((a - b + 540) % 360) - 180| — это и есть расстояние по кругу:
-    // 0 для совпадающих тонов, 180 для противоположных.
-    const dist = Math.abs(((ACCENT_HUE[id] - hue + 540) % 360) - 180);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = id;
-    }
+  ACCENTS.forEach(a => {
+    // Расстояние по кругу: 0 для совпадающих тонов, 180 для противоположных.
+    const dist = Math.abs(((a.hue - hue + 540) % 360) - 180);
+    if (dist < bestDist) { bestDist = dist; best = a.id; }
   });
   return best;
 };
 
-// --- Поверхности ------------------------------------------------------
-//
-// Ряд `slate` держит на себе и панели, и текст: `text-slate-900` на светлой
-// теме, `text-slate-100` на тёмной. Поэтому тонировать его можно только по
-// тону и насыщенности — светлота каждой ступени остаётся ровно такой, какая
-// была у Tailwind. Иначе первым же делом поплывёт контраст текста.
-
-/** Светлота ступеней slate у Tailwind, в процентах. */
-const SURFACE_L = [98, 96.1, 91.4, 83.9, 65.1, 46.9, 34.5, 26.7, 17.5, 11.2, 4.9];
-/** Насыщенность тех же ступеней. Крайние темнее и насыщеннее середины. */
-const SURFACE_S = [40, 40, 31.8, 26.8, 20.2, 16.3, 19.3, 25, 32.6, 47.4, 84];
-
-const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
-  const S = s / 100;
-  const L = l / 100;
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = S * Math.min(L, 1 - L);
-  const f = (n: number) => L - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  return [
-    Math.round(255 * f(0)),
-    Math.round(255 * f(8)),
-    Math.round(255 * f(4))
-  ];
-};
-
-/**
- * Ряд поверхностей под заданный тон.
- *
- * @param hue    тон в градусах
- * @param satMul множитель насыщенности: 0 — нейтральный серый, 1 — как у
- *               стандартного slate, выше 1.6 цвет начинает спорить с акцентом
- */
-export const buildSurfaceRamp = (hue: number, satMul: number): Ramp => {
-  const out: Ramp = {};
-  STOPS.forEach((stop, i) => {
-    out[stop] = hslToRgb(hue, Math.min(SURFACE_S[i] * satMul, 90), SURFACE_L[i]);
-  });
-  return out;
-};
-
-// --- Фоны -------------------------------------------------------------
+// --- Темы (поверхности) -----------------------------------------------
 
 export interface BackgroundDef {
   id: string;
   label: string;
-  /** Тон поверхностей, градусы. */
-  hue: number;
-  /** Множитель насыщенности поверхностей. */
-  sat: number;
-  /** Акцент, который идёт к этому фону по умолчанию. */
-  accent: string;
+  /** Фон окна и три слоя поверхностей. */
+  bg: string;
+  s1: string;
+  s2: string;
+  s3: string;
+  /** Прозрачность обычной и усиленной границы (белый). */
+  line: number;
+  lineStrong: number;
+  /**
+   * Ряд `slate` для старых компонентов: 950 — фон, 900 — панели, 800 —
+   * приподнятые элементы, 400 и светлее — текст.
+   */
+  surface: Ramp;
 }
 
+const TEXT_RAMP = ['#FAFAFA', '#EDEDEF', '#DCDCE0', '#C4C4CC', '#A1A1AA', '#6B6B76'];
+
 export const BACKGROUNDS: BackgroundDef[] = [
-  { id: 'slate',   label: 'Графит',    hue: 217, sat: 1,    accent: 'indigo' },
-  { id: 'ink',     label: 'Чернила',   hue: 230, sat: 1.35, accent: 'violet' },
-  { id: 'crimson', label: 'Багрянец',  hue: 350, sat: 1.1,  accent: 'red' },
-  { id: 'forest',  label: 'Хвоя',      hue: 155, sat: 1.1,  accent: 'emerald' },
-  { id: 'ocean',   label: 'Океан',     hue: 200, sat: 1.3,  accent: 'cyan' },
-  { id: 'sand',    label: 'Песок',     hue: 35,  sat: 0.9,  accent: 'amber' },
-  { id: 'plum',    label: 'Слива',     hue: 290, sat: 1.15, accent: 'violet' },
-  { id: 'neutral', label: 'Нейтральный', hue: 217, sat: 0,  accent: 'indigo' }
+  {
+    id: 'black',
+    label: 'Чёрная (OLED)',
+    bg: '#000000', s1: '#0B0B0D', s2: '#121214', s3: '#1A1A1D',
+    line: 0.07, lineStrong: 0.13,
+    surface: ramp([...TEXT_RAMP, '#4A4A52', '#2E2E33', '#1A1A1D', '#0B0B0D', '#000000'])
+  },
+  {
+    id: 'graphite',
+    label: 'Тёмная (графит)',
+    bg: '#0E0F12', s1: '#15161A', s2: '#1C1D22', s3: '#24252B',
+    line: 0.08, lineStrong: 0.15,
+    surface: ramp([...TEXT_RAMP, '#4A4B53', '#33343B', '#24252B', '#15161A', '#0E0F12'])
+  }
 ];
 
+/** Тема по id. Прежние «фоны-оттенки» (Графит, Чернила, Хвоя…) — в чёрную. */
 export const getBackground = (id: string): BackgroundDef =>
   BACKGROUNDS.find(b => b.id === id) || BACKGROUNDS[0];
 
@@ -203,44 +153,44 @@ const setRamp = (el: HTMLElement, prefix: string, r: Ramp) => {
   });
 };
 
+const setRgb = (el: HTMLElement, name: string, hex: string) => {
+  const [r, g, b] = hexToRgb(hex);
+  el.style.setProperty(name, `${r} ${g} ${b}`);
+};
+
 export interface ThemeState {
-  mode: ThemeMode;
   accent: string;
   background: string;
-  /** Своя картинка фоном, data-URL. Пусто — используется пресет. */
+  /** Своя картинка фоном, data-URL. Пусто — сплошной фон темы. */
   customImage: string;
-  /** Тон и насыщенность, снятые с картинки. */
-  customHue: number;
-  customSat: number;
 }
 
 /**
  * Раскладывает тему по CSS-переменным корневого элемента.
  *
- * Вызывать при любом изменении темы. Дешёвая операция: 22 присваивания
- * переменных, перерисовку делает браузер.
+ * Вызывать при любом изменении темы. Класс `dark` ставится всегда: на нём
+ * держатся `dark:`-классы старых компонентов, а светлой темы больше нет.
  */
 export const applyTheme = (t: ThemeState) => {
   const root = document.documentElement;
+  root.classList.add('dark');
 
-  root.classList.toggle('dark', t.mode === 'dark');
-
+  const bg = getBackground(t.background);
+  root.dataset.theme = bg.id;
   setRamp(root, 'accent', getAccent(t.accent).ramp);
+  setRamp(root, 'surface', bg.surface);
 
-  const useCustom = !!t.customImage;
-  const hue = useCustom ? t.customHue : getBackground(t.background).hue;
-  const sat = useCustom ? t.customSat : getBackground(t.background).sat;
-  setRamp(root, 'surface', buildSurfaceRamp(hue, sat));
+  setRgb(root, '--c-bg', bg.bg);
+  setRgb(root, '--c-s1', bg.s1);
+  setRgb(root, '--c-s2', bg.s2);
+  setRgb(root, '--c-s3', bg.s3);
+  root.style.setProperty('--c-line', String(bg.line));
+  root.style.setProperty('--c-line-strong', String(bg.lineStrong));
 
-  // Подложка окна. Своя картинка идёт под затемняющий слой: без него белый
-  // текст на светлом снимке нечитаем, а панели теряют границы.
+  // Своя картинка идёт под затемняющий слой: без него текст поверх снимка
+  // нечитаем. Панели остаются сплошными — картинка видна в просветах.
   if (t.customImage) {
-    // Плотность подобрана так, чтобы картинку было видно, но панели поверх
-    // неё читались. Панели сами полупрозрачные, поэтому снимок проступает и
-    // сквозь них — на глухом затемнении в 0.82 он пропадал целиком.
-    const scrim = t.mode === 'dark'
-      ? 'linear-gradient(rgba(2, 6, 23, 0.68), rgba(2, 6, 23, 0.68))'
-      : 'linear-gradient(rgba(248, 250, 252, 0.8), rgba(248, 250, 252, 0.8))';
+    const scrim = 'linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.62))';
     root.style.setProperty('--app-bg-image', `${scrim}, url("${t.customImage}")`);
   } else {
     root.style.setProperty('--app-bg-image', 'none');
@@ -248,10 +198,9 @@ export const applyTheme = (t: ThemeState) => {
 };
 
 /**
- * Средний цвет картинки — тон и насыщенность для подстройки интерфейса.
+ * Средний тон картинки — чтобы подобрать к ней акцент.
  *
- * Считается по уменьшенной до 32x32 копии: полный размер здесь не нужен,
- * а мелкая копия усредняет сама по себе. Тёмные и почти серые пиксели тон
+ * Считается по уменьшенной до 32x32 копии. Тёмные и почти серые пиксели тон
  * задают плохо, поэтому берутся только достаточно яркие и цветные.
  */
 export const averageHueOfImage = (dataUrl: string): Promise<{ hue: number; sat: number }> =>
@@ -264,7 +213,7 @@ export const averageHueOfImage = (dataUrl: string): Promise<{ hue: number; sat: 
         c.width = N;
         c.height = N;
         const ctx = c.getContext('2d');
-        if (!ctx) return resolve({ hue: 217, sat: 1 });
+        if (!ctx) return resolve({ hue: 247, sat: 1 });
         ctx.drawImage(img, 0, 0, N, N);
         const d = ctx.getImageData(0, 0, N, N).data;
 
@@ -300,29 +249,25 @@ export const averageHueOfImage = (dataUrl: string): Promise<{ hue: number; sat: 
           count++;
         }
 
-        if (count === 0) return resolve({ hue: 217, sat: 0 });
+        if (count === 0) return resolve({ hue: 247, sat: 0 });
 
         let hue = (Math.atan2(y, x) * 180) / Math.PI;
         if (hue < 0) hue += 360;
-
-        // Насыщенность картинки переводим в множитель для поверхностей.
-        // Потолок 1.6: выше панели начинают спорить с акцентом за внимание.
         const sat = Math.min((satSum / count) * 2.2, 1.6);
         resolve({ hue: Math.round(hue), sat: Math.round(sat * 100) / 100 });
       } catch {
-        resolve({ hue: 217, sat: 1 });
+        resolve({ hue: 247, sat: 1 });
       }
     };
-    img.onerror = () => resolve({ hue: 217, sat: 1 });
+    img.onerror = () => resolve({ hue: 247, sat: 1 });
     img.src = dataUrl;
   });
 
 /**
  * Ужимает выбранный файл до пригодного для хранения размера.
  *
- * Картинку приходится держать в localStorage — у него на всё про всё около
- * пяти мегабайт, а снимок с телефона легко весит больше. Ужимаем до 1600 px
- * по длинной стороне и пишем в JPEG.
+ * Картинка хранится в настройках — снимок с телефона легко весит больше
+ * разумного. Ужимаем до 1600 px по длинной стороне и пишем в JPEG.
  */
 export const shrinkImage = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {

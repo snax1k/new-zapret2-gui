@@ -66,7 +66,7 @@ namespace Zapret2App
         private static EventWaitHandle instanceShowEvent;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.4.2";
+        public const string AppVersion = "0.4.3-test";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
