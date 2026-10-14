@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Zapret2 Control Center — Автономный макет</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #000000;
+      --surface-1: #0B0B0D;
+      --surface-2: #121214;
+      --surface-3: #1A1A1D;
+      --border: rgba(255, 255, 255, 0.07);
+      --border-strong: rgba(255, 255, 255, 0.13);
+      --text-primary: #EDEDEF;
+      --text-secondary: #A1A1AA;
+      --text-muted: #6B6B76;
+      --accent: #7C6CFF;
+      --accent-soft: rgba(124, 108, 255, 0.15);
+      --accent-border: rgba(124, 108, 255, 0.42);
+      --success: #22C55E;
+      --warning: #F59E0B;
+      --danger: #EF4444;
+    }
+    [data-theme="dark"] {
+      --bg: #0E0F12;
+      --surface-1: #15161A;
+      --surface-2: #1C1D22;
+      --surface-3: #24252B;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.15);
+    }
+    body {
+      background: #070709;
+      color: var(--text-primary);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', sans-serif;
+      margin: 0;
+      user-select: none;
+    }
+    .font-mono { font-family: 'JetBrains Mono', monospace; }
+    .app-window {
+      width: 1040px;
+      height: 720px;
+      background: var(--bg);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.65);
+    }
+    .surface-1 { background: var(--surface-1); border: 1px solid var(--border); }
+    .surface-2 { background: var(--surface-2); border: 1px solid var(--border); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4" data-theme="black">
+  <div class="mb-3 flex items-center gap-2 text-xs">
+    <button onclick="document.body.dataset.theme = document.body.dataset.theme === 'black' ? 'dark' : 'black'" class="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white font-medium">
+      Переключить тему («Чёрная» / «Тёмная»)
+    </button>
+    <button onclick="toggleBypass()" class="px-3 py-1.5 rounded-lg bg-[#7C6CFF] text-white font-medium">
+      Переключить состояние обхода
+    </button>
+  </div>
+
+  <div class="app-window">
+    <!-- Полоса заголовка 40px -->
+    <div class="h-[40px] px-3.5 flex items-center justify-between surface-1 border-b">
+      <div class="flex items-center gap-2">
+        <span class="font-semibold tracking-wider text-[12px]">ZAPRET 2</span>
+        <span class="px-1.5 py-0.5 rounded text-[11px] font-mono surface-2 text-[#A1A1AA]">v0.4.2</span>
+        <span class="px-1.5 py-0.5 rounded text-[11px] font-medium bg-[#22C55E]/15 text-[#4ADE80] border border-[#22C55E]/30">ADMIN</span>
+        <span class="px-2 py-0.5 rounded text-[11px] surface-2 text-[#A1A1AA] flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-[#22C55E]"></span>WinDivert 64-bit
+        </span>
+      </div>
+      <div class="text-[11px] text-[#A1A1AA]">Свернуть в трей · ✕</div>
+    </div>
+
+    <div class="flex-1 flex min-h-0">
+      <!-- Боковое меню -->
+      <div class="w-[212px] p-3 flex flex-col justify-between surface-1 border-r">
+        <div class="space-y-1 text-[13px]">
+          <div class="px-3 py-2 rounded-lg bg-[#7C6CFF]/15 border border-[#7C6CFF]/40 text-white font-medium">Главная</div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA]">Подбор</div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA] flex justify-between"><span>Telegram</span><span class="text-[11px] px-1.5 rounded bg-[#22C55E]/15 text-[#4ADE80]">вкл</span></div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA]">Списки сайтов</div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA]">Диагностика</div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA]">Журнал</div>
+          <div class="px-3 py-2 rounded-lg text-[#A1A1AA]">Настройки</div>
+        </div>
+        <div id="sidebar-status" class="p-2.5 rounded-lg surface-2 text-[12px] text-[#A1A1AA]">● Обход выключен</div>
+      </div>
+
+      <!-- Главная область -->
+      <div class="flex-1 p-5 space-y-3.5 overflow-y-auto">
+        <div id="hero-card" class="rounded-[14px] p-5 surface-1 flex flex-col items-center text-center">
+          <button id="power-btn" onclick="toggleBypass()" class="w-[112px] h-[112px] rounded-full surface-2 border-2 border-white/15 flex flex-col items-center justify-center transition-all">
+            <span id="power-label" class="text-[13px] font-semibold">Включить</span>
+          </button>
+          <h2 id="hero-title" class="text-[15px] font-semibold mt-3">Обход выключен — трафик идёт как обычно</h2>
+          <p id="hero-sub" class="text-[12px] text-[#A1A1AA] mt-0.5">Нажмите кнопку, чтобы Discord и YouTube открывались без ограничений</p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="rounded-[12px] p-3.5 surface-1 space-y-2">
+            <div class="flex justify-between items-center">
+              <span class="text-[13px] font-semibold">Что сейчас настроено</span>
+              <span class="text-[12px] px-2.5 py-1 rounded surface-2">Подобрать заново</span>
+            </div>
+            <div class="px-3 py-2 rounded-lg surface-2 flex justify-between text-[12px]"><span>Discord</span><span class="text-[#4ADE80]">multidisorder · проверено подбором ✓</span></div>
+            <div class="px-3 py-2 rounded-lg surface-2 flex justify-between text-[12px]"><span>YouTube</span><span class="text-[#4ADE80]">multidisorder · проверено подбором ✓</span></div>
+          </div>
+          <div class="rounded-[12px] p-3.5 surface-1 space-y-2">
+            <div class="flex justify-between items-center">
+              <span class="text-[13px] font-semibold">Проверка компьютера</span>
+              <span class="text-[12px] px-2.5 py-1 rounded surface-2">Проверить снова</span>
+            </div>
+            <div class="p-2.5 rounded-lg surface-2 text-[12px] text-[#A1A1AA]">
+              <span class="text-[#4ADE80] font-medium">Помех нет:</span> прокси выключен, VPN не перехватывает трафик, лишних копий ядра нет.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let isOn = false;
+    function toggleBypass() {
+      isOn = !isOn;
+      const btn = document.getElementById('power-btn');
+      const label = document.getElementById('power-label');
+      const title = document.getElementById('hero-title');
+      const sub = document.getElementById('hero-sub');
+      const side = document.getElementById('sidebar-status');
+      if (isOn) {
+        btn.style.borderColor = '#22C55E';
+        btn.style.background = 'rgba(34,197,94,0.14)';
+        btn.style.boxShadow = '0 0 36px rgba(34,197,94,0.26)';
+        label.textContent = 'Включено';
+        label.style.color = '#4ADE80';
+        title.textContent = 'Обход работает';
+        sub.textContent = '1 ч 12 мин · Обработано соединений: 2 341 · Сайтов распознано: 87';
+        side.textContent = '● Обход включён · 1 ч 12 мин';
+        side.style.color = '#4ADE80';
+      } else {
+        btn.style.borderColor = 'rgba(255,255,255,0.15)';
+        btn.style.background = 'var(--surface-2)';
+        btn.style.boxShadow = 'none';
+        label.textContent = 'Включить';
+        label.style.color = '#EDEDEF';
+        title.textContent = 'Обход выключен — трафик идёт как обычно';
+        sub.textContent = 'Нажмите кнопку, чтобы Discord и YouTube открывались без ограничений';
+        side.textContent = '● Обход выключен';
+        side.style.color = '#A1A1AA';
+      }
+    }
+  </script>
+</body>
+</html>
