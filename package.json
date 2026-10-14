@@ -1,7 +1,7 @@
 {
   "name": "zapret2-gui",
   "private": true,
-  "version": "0.4.3-test",
+  "version": "0.4.3",
   "type": "module",
   "scripts": {
     "dev": "vite",

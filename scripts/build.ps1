@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.4.3-test"
+    [string]$Version = "0.4.3"
 )
 
 $ErrorActionPreference = "Stop"
