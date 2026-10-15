@@ -873,8 +873,9 @@ const tuneSummary = (o: TuneOutcome | undefined): { tone: 'ok' | 'warn' | 'skip'
 const FinishStep: React.FC<{
   discord?: TuneOutcome; youtube?: TuneOutcome; telegramOn: boolean;
   startNow: boolean; setStartNow: (v: boolean) => void;
-}> = ({ discord, youtube, telegramOn, startNow, setStartNow }) => {
-  const { status } = useApp();
+  withWindows: boolean; setWithWindows: (v: boolean) => void;
+}> = ({ discord, youtube, telegramOn, startNow, setStartNow, withWindows, setWithWindows }) => {
+  const { status, autostart } = useApp();
   const rows = [
     { icon: Headphones, name: 'Discord', ...tuneSummary(discord) },
     { icon: Youtube, name: 'YouTube', ...tuneSummary(youtube) },
@@ -935,6 +936,26 @@ const FinishStep: React.FC<{
         </label>
       )}
 
+      {autostart.enabled ? (
+        <Callout tone="ok" icon={Power}>Программа уже запускается вместе с Windows и сама включает обход.</Callout>
+      ) : (
+        <label className="flex items-start gap-3 p-4 rounded-2xl border border-indigo-500/25 bg-indigo-500/5 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={withWindows}
+            onChange={e => setWithWindows(e.target.checked)}
+            className="mt-0.5 w-4 h-4 accent-indigo-600"
+          />
+          <div>
+            <div className="text-[13px] font-bold text-slate-900 dark:text-slate-100">Запускать вместе с Windows</div>
+            <p className="text-[12px] text-slate-500 dark:text-slate-400">
+              Программа будет стартовать при входе в систему сразу в трей и включать обход сама —
+              открывать её каждый раз не придётся. Выключается в «Настройках».
+            </p>
+          </div>
+        </label>
+      )}
+
       <div>
         <div className="text-[12px] font-bold text-slate-900 dark:text-slate-100 mb-2">Где что найти</div>
         <div className="grid grid-cols-2 gap-2">
@@ -975,7 +996,8 @@ export const SetupWizard: React.FC = () => {
   const {
     isWizardOpen, closeWizard, isAutotuneRunning,
     presets, activePreset, setActivePresetId, addLog,
-    tgProxy, status, toggleStatus, setActiveTab, preflight
+    tgProxy, status, toggleStatus, setActiveTab, preflight,
+    autostart, setAutostartEnabled
   } = useApp();
 
   const [step, setStep] = useState(0);
@@ -984,6 +1006,7 @@ export const SetupWizard: React.FC = () => {
   const [youtube, setYoutube] = useState<TuneOutcome | undefined>();
   const [telegramEnabled, setTelegramEnabled] = useState(false);
   const [startNow, setStartNow] = useState(true);
+  const [withWindows, setWithWindows] = useState(true);
   const [tuneNonce, setTuneNonce] = useState(0);
 
   // Каждое открытие — с чистого листа. Компонент живёт, пока живёт окно, и
@@ -997,6 +1020,7 @@ export const SetupWizard: React.FC = () => {
     setYoutube(undefined);
     setTelegramEnabled(false);
     setStartNow(true);
+    setWithWindows(true);
   }, [isWizardOpen]);
 
   if (!isWizardOpen) return null;
@@ -1032,7 +1056,8 @@ export const SetupWizard: React.FC = () => {
   const finish = () => {
     closeWizard('done');
     setActiveTab('dashboard');
-    if (startNow && status !== 'connected' && status !== 'connecting') toggleStatus();
+    if (startNow && status !== 'connected' && status !== 'connecting' && status !== 'restarting') toggleStatus();
+    if (withWindows && !autostart.enabled) setAutostartEnabled(true);
   };
 
   const close = () => {
@@ -1195,6 +1220,8 @@ export const SetupWizard: React.FC = () => {
                 telegramOn={tgProxy.running}
                 startNow={startNow}
                 setStartNow={setStartNow}
+                withWindows={withWindows}
+                setWithWindows={setWithWindows}
               />
             )}
           </div>

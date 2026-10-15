@@ -88,7 +88,7 @@ export const TitleBar: React.FC = () => {
         <span className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded-[5px] text-[11px] bg-s2 text-t2 border border-line">
           <span className={`w-1.5 h-1.5 rounded-full ${
             status === 'connected' ? 'bg-green-500'
-              : status === 'connecting' ? 'bg-amber-500 animate-pulse'
+              : status === 'connecting' || status === 'restarting' ? 'bg-amber-500 animate-pulse'
               : status === 'error' ? 'bg-red-500' : 'bg-t3'
           }`} />
           <span>{engineLabel}</span>

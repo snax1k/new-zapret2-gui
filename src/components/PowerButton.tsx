@@ -16,12 +16,16 @@ const IDLE_ALERT_AFTER_SEC = 60;
  * цветом, иконкой и текстом одновременно.
  */
 export const PowerButton: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
-  const { status, toggleStatus, stats, quickToggles } = useApp();
+  const { status, toggleStatus, stats, quickToggles, restartInfo } = useApp();
 
   const isOn = status === 'connected';
   const isConnecting = status === 'connecting';
   const isError = status === 'error';
-  const isOff = !isOn && !isConnecting && !isError;
+  // Ядро упало, нативная часть поднимет его через паузу. Выглядит как
+  // подключение, но кнопка нажимается — и выключает обход.
+  const isRestarting = status === 'restarting';
+  const isBusy = isConnecting || isRestarting;
+  const isOff = !isOn && !isBusy && !isError;
 
   // Счётчики берутся из вывода ядра, а он есть только с --debug. Без него
   // метрика недоступна, а не равна нулю.
@@ -44,7 +48,7 @@ export const PowerButton: React.FC<{ compact?: boolean }> = ({ compact = false }
       style={{
         backgroundImage: isOn
           ? `radial-gradient(circle at 50% 0%, ${idle ? 'rgba(245,158,11,0.09)' : 'rgba(34,197,94,0.11)'}, transparent 70%)`
-          : isConnecting
+          : isBusy
             ? 'radial-gradient(circle at 50% 0%, rgba(245,158,11,0.09), transparent 70%)'
             : isError
               ? 'radial-gradient(circle at 50% 0%, rgba(239,68,68,0.08), transparent 70%)'
@@ -55,35 +59,36 @@ export const PowerButton: React.FC<{ compact?: boolean }> = ({ compact = false }
         type="button"
         onClick={toggleStatus}
         disabled={isConnecting}
-        title={isOn ? 'Выключить обход' : 'Включить обход'}
+        title={isOn || isRestarting ? 'Выключить обход' : 'Включить обход'}
         className={`${size} rounded-full flex flex-col items-center justify-center transition-all duration-300 select-none border-2 hover:brightness-110 active:scale-[0.98] ${
           isOn
             ? 'bg-green-500/[0.14] border-green-500 shadow-[0_0_36px_rgba(34,197,94,0.26),inset_0_0_16px_rgba(34,197,94,0.14)]'
-            : isConnecting
+            : isBusy
               ? 'bg-amber-500/[0.12] border-amber-500'
               : isError
                 ? 'bg-red-500/[0.10] border-red-500/70'
                 : 'bg-s2 border-line-strong shadow-[0_8px_24px_rgba(0,0,0,0.35)] hover:border-ac/60'
         }`}
       >
-        {isConnecting
+        {isBusy
           ? <RefreshCw className={`${iconSize} text-amber-500 animate-spin mb-1`} />
           : <Power className={`${iconSize} mb-1 ${isOn ? 'text-green-500' : isError ? 'text-red-400' : 'text-t1'}`} />}
-        <span className={`text-[12px] font-semibold ${isOn ? 'text-green-400' : isConnecting ? 'text-amber-400' : isError ? 'text-red-300' : 'text-t1'}`}>
-          {isOn ? 'Включено' : isConnecting ? 'Подключение…' : isError ? 'Повторить' : 'Включить'}
+        <span className={`text-[12px] font-semibold ${isOn ? 'text-green-400' : isBusy ? 'text-amber-400' : isError ? 'text-red-300' : 'text-t1'}`}>
+          {isOn ? 'Включено' : isConnecting ? 'Подключение…' : isRestarting ? 'Выключить' : isError ? 'Повторить' : 'Включить'}
         </span>
       </button>
 
       <div className="mt-3 flex items-center gap-2">
         {isOn && !idle && <CheckCircle2 className="w-4 h-4 text-green-500" />}
         {idle && <AlertTriangle className="w-4 h-4 text-amber-500" />}
-        {isConnecting && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
+        {isBusy && <RefreshCw className="w-4 h-4 text-amber-500 animate-spin" />}
         {isError && <XCircle className="w-4 h-4 text-red-500" />}
         {isOff && <span className="w-2.5 h-2.5 rounded-full bg-t3" />}
         <h2 className="text-[15px] font-semibold text-t1">
           {idle ? 'Ядро работает, но трафик через него не идёт'
             : isOn ? 'Обход работает'
             : isConnecting ? 'Подключение…'
+            : isRestarting ? 'Ядро упало — перезапускаю'
             : isError ? 'Ядро не запустилось'
             : 'Обход выключен — трафик идёт как обычно'}
         </h2>
@@ -94,6 +99,9 @@ export const PowerButton: React.FC<{ compact?: boolean }> = ({ compact = false }
           ? `За ${Math.floor(stats.uptimeSeconds / 60)} мин ни одного вмешательства — смотрите «Проверку компьютера» ниже`
           : isOn ? formatUptimeShort(stats.uptimeSeconds)
           : isConnecting ? 'Запускается фильтр трафика от имени администратора…'
+          : isRestarting ? (restartInfo
+              ? `Новая попытка через ${restartInfo.delaySec} с (${restartInfo.attempt} из ${restartInfo.max}). Причина — в «Журнале».`
+              : 'Причина — в «Журнале».')
           : isError ? (stats.driverStatus || 'Причина — в «Журнале». Нажмите кнопку, чтобы попробовать ещё раз.')
           : 'Нажмите кнопку, чтобы Discord и YouTube открывались без ограничений'}
       </p>

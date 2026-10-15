@@ -35,6 +35,7 @@ export const SettingsView: React.FC = () => {
     setIsUpdateModalOpen, accent, setAccent, background, setBackground,
     customBackground, setCustomBackground, clearCustomBackground,
     closeBehavior, setCloseBehavior, killZombieWinDivert, openAppFolder, isWatchdogClean,
+    autostart, setAutostartEnabled, autoEnableOnLaunch, setAutoEnableOnLaunch,
     discordCache, isDiscordCleaning, scanDiscordCache, cleanDiscordCache
   } = useApp();
 
@@ -139,6 +140,38 @@ export const SettingsView: React.FC = () => {
             {closeBehavior === 'minimize_to_tray'
               ? 'Окно прячется в трей около часов, обход продолжает работать в фоне.'
               : 'Ядро останавливается, драйвер WinDivert выгружается — если им не пользуется другая программа.'}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 text-[12px] pt-1 border-t border-line">
+            <div className="min-w-0">
+              <div className="text-t1">Запускать вместе с Windows</div>
+              <div className="text-[11px] text-t3">Без окна и запроса UAC — программа сразу в трее</div>
+            </div>
+            <Toggle
+              checked={autostart.enabled}
+              onChange={setAutostartEnabled}
+              disabled={!autostart.known || autostart.busy}
+              title={!autostart.known ? 'Узнаю состояние у Планировщика заданий…' : undefined}
+            />
+          </div>
+          {autostart.enabled && !autostart.current && (
+            <Note tone="warn">
+              Автозапуск открывает другой файл программы: <span className="font-mono break-all">{autostart.path}</span>.{' '}
+              <button type="button" onClick={() => setAutostartEnabled(true)} disabled={autostart.busy} className="underline hover:text-white">
+                Запускать этот
+              </button>
+            </Note>
+          )}
+          {autostart.error && <Note tone="bad">{autostart.error}</Note>}
+          <div className="flex items-center justify-between gap-2 text-[12px]">
+            <div className="min-w-0">
+              <div className="text-t1">Сразу включать обход</div>
+              <div className="text-[11px] text-t3">При каждом запуске программы — с выбранными стратегиями</div>
+            </div>
+            <Toggle checked={autoEnableOnLaunch} onChange={setAutoEnableOnLaunch} />
+          </div>
+          <div className="text-[11px] text-t3 leading-snug -mt-1">
+            Если ядро упадёт, программа поднимет его сама: до 5 попыток подряд, с паузой от 3 секунд до 2 минут.
           </div>
 
           <div className="flex items-center justify-between gap-2 text-[12px] pt-1 border-t border-line">

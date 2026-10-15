@@ -21,7 +21,9 @@ import {
   AutotuneRow,
   TuneVerdicts,
   TgProxyState,
-  TgProxySettings
+  TgProxySettings,
+  AutostartState,
+  CoreRestartInfo
 } from '../types';
 import {
   buildPresetArgs,
@@ -47,7 +49,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.4.4';
+export const APP_VERSION = '0.5.0-test';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -65,6 +67,14 @@ const TG_SETTINGS_KEY = 'zapret2_tgproxy_v1';
  * Пока ключа нет, мастер открывается при каждом запуске.
  */
 const WIZARD_KEY = 'zapret2_wizard_v1';
+/** Включать обход сразу при запуске программы: '1' или '0'. */
+const AUTO_ENABLE_KEY = 'zapret2_auto_enable_v1';
+/**
+ * Обход уже включался автоматически в этом запуске программы.
+ * sessionStorage живёт, пока жив WebView: перезагрузка страницы его
+ * сохраняет, новый запуск программы — нет.
+ */
+const AUTO_ENABLE_SESSION_KEY = 'zapret2_auto_enabled_this_launch';
 /**
  * Чаще раза в шесть часов дёргать GitHub незачем: у неавторизованных
  * запросов лимит 60 в час на адрес, а релизы выходят не ежечасно.
@@ -336,6 +346,15 @@ interface AppContextType {
   clearCustomBackground: () => void;
   closeBehavior: CloseBehavior;
   setCloseBehavior: (b: CloseBehavior) => void;
+  /** Запуск при входе в Windows (задача Планировщика). */
+  autostart: AutostartState;
+  /** Включает или выключает автозапуск; включение заодно включает autoEnableOnLaunch. */
+  setAutostartEnabled: (on: boolean) => void;
+  /** Включать обход сразу при запуске программы. */
+  autoEnableOnLaunch: boolean;
+  setAutoEnableOnLaunch: (on: boolean) => void;
+  /** Ядро упало и ждёт перезапуска — номер попытки и пауза. */
+  restartInfo: CoreRestartInfo | null;
   showTrayToast: boolean;
   setShowTrayToast: (show: boolean) => void;
   activePresetId: string;
@@ -497,6 +516,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     saveSetting(UPDATE_AUTO_KEY, v ? 'on' : 'off');
     setAutoCheckUpdatesState(v);
   };
+
+  // ---- Автозапуск и автовключение --------------------------------------
+  //
+  // Источник правды об автозапуске — задача в Планировщике, а не флажок в
+  // настройках: её могли удалить руками, а интерфейс обязан показывать то,
+  // что есть. Поэтому состояние приходит от нативной части.
+  const [autostart, setAutostart] = useState<AutostartState>({
+    known: false, enabled: false, current: true, path: '', busy: false, error: ''
+  });
+  const [autoEnableOnLaunch, setAutoEnableOnLaunchState] = useState<boolean>(
+    () => loadSetting(AUTO_ENABLE_KEY) === '1'
+  );
+  const setAutoEnableOnLaunch = (on: boolean) => {
+    saveSetting(AUTO_ENABLE_KEY, on ? '1' : '0');
+    setAutoEnableOnLaunchState(on);
+  };
+  const [restartInfo, setRestartInfo] = useState<CoreRestartInfo | null>(null);
   // ---- Мастер первого запуска --------------------------------------
   //
   // Открывается сам, пока его не прошли и не пропустили. Решение хранится
@@ -708,15 +744,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             ]);
           } else if (data.type === 'status_change') {
             setStatus(data.status);
+            setRestartInfo(data.status === 'restarting'
+              ? { attempt: data.attempt || 1, max: data.max || 1, delaySec: data.delay || 0 }
+              : null);
             setStats(prev => ({
               ...prev,
               pid: data.status === 'connected' ? (data.pid || 0) : 0,
               uptimeSeconds: data.status === 'connected' ? prev.uptimeSeconds : 0,
               driverStatus:
                 data.status === 'connected' ? 'Активен (фильтрация)'
+                  : data.status === 'restarting' ? 'Перезапуск ядра'
                   : data.status === 'error' ? 'Ошибка запуска'
                   : 'Остановлен'
             }));
+          } else if (data.type === 'autostart') {
+            setAutostart({
+              known: true,
+              enabled: !!data.enabled,
+              current: data.current !== false,
+              path: data.path || '',
+              busy: false,
+              error: data.error || ''
+            });
           } else if (data.type === 'update_progress') {
             setUpdateInfo(prev => ({
               ...prev,
@@ -1055,7 +1104,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const toggleStatus = () => {
     if (status === 'connecting') return;
 
-    if (status === 'connected') {
+    // Во время ожидания перезапуска кнопка выключает обход: нативная часть
+    // отменит назначенную попытку.
+    if (status === 'connected' || status === 'restarting') {
       setStatus('connecting');
       addLog('warn', 'Остановка winws и выгрузка WinDivert...', 'Runner');
       if (window.chrome?.webview) {
@@ -1264,6 +1315,78 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // реакция на правку настроек — их применяет setTgSettings.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---- Автозапуск: действия -------------------------------------------
+
+  useEffect(() => {
+    if (!window.chrome?.webview) return;
+    const t = setTimeout(() => window.chrome!.webview!.postMessage('autostart_get'), 600);
+    return () => clearTimeout(t);
+  }, []);
+
+  const setAutostartEnabled = (on: boolean) => {
+    if (!window.chrome?.webview) {
+      // Браузер при разработке: нативной части нет, меняется только вид.
+      setAutostart(prev => ({ ...prev, known: true, enabled: on, current: true, error: '' }));
+      return;
+    }
+    setAutostart(prev => ({ ...prev, busy: true, error: '' }));
+    window.chrome.webview.postMessage(on ? 'autostart_set:1' : 'autostart_set:0');
+    // Запуск при входе без включения обхода почти бессмыслен: программа
+    // поднимется в трее и будет ждать нажатия, которого никто не сделает.
+    if (on && !autoEnableOnLaunch) {
+      setAutoEnableOnLaunch(true);
+      addLog('info', 'Вместе с автозапуском включено «Сразу включать обход».', 'Autostart');
+    }
+  };
+
+  /**
+   * Обход при запуске программы.
+   *
+   * Сначала ждём маршрут от нативной части — он приходит вместе с
+   * проверкой компьютера через секунду-две: ядро привязывается к сетевой
+   * карте, и запуск без неё через мгновение пришлось бы повторять. Если
+   * маршрута нет и через 5 с (при входе в Windows сеть может ещё не
+   * подняться), запускаем без привязки — эффект смены карты выше
+   * перезапустит ядро, когда она появится.
+   *
+   * Один раз за запуск программы: перезагрузка страницы не должна снова
+   * включать обход, который человек только что выключил. И не до мастера:
+   * пока его не прошли, стратегии ещё не выбраны.
+   */
+  const autoEnablePending = useRef(false);
+  const toggleStatusRef = useRef(toggleStatus);
+  toggleStatusRef.current = toggleStatus;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  const runAutoEnable = () => {
+    if (!autoEnablePending.current) return;
+    autoEnablePending.current = false;
+    try { sessionStorage.setItem(AUTO_ENABLE_SESSION_KEY, '1'); } catch { }
+    if (statusRef.current !== 'disconnected' && statusRef.current !== 'error') return;
+    const atLogon = !!(window as any).__zapret_launch?.atLogon;
+    addLog('info', atLogon
+      ? 'Программа запущена при входе в Windows — включаю обход.'
+      : 'Включаю обход при запуске программы (Настройки → «Сразу включать обход»).', 'Runner');
+    toggleStatusRef.current();
+  };
+
+  useEffect(() => {
+    if (!window.chrome?.webview) return;
+    try { if (sessionStorage.getItem(AUTO_ENABLE_SESSION_KEY)) return; } catch { }
+    if (loadSetting(AUTO_ENABLE_KEY) !== '1' || !loadSetting(WIZARD_KEY)) return;
+    autoEnablePending.current = true;
+    const t = setTimeout(runAutoEnable, 5000);
+    return () => { clearTimeout(t); autoEnablePending.current = false; };
+    // Стартовое действие: только при монтировании.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (netRoute && autoEnablePending.current) runAutoEnable();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [netRoute]);
 
   /**
    * Автоподбор стратегии YouTube.
@@ -1932,6 +2055,11 @@ const parseReleaseHighlights = (body: string): string[] => {
         clearCustomBackground,
         closeBehavior,
         setCloseBehavior,
+        autostart,
+        setAutostartEnabled,
+        autoEnableOnLaunch,
+        setAutoEnableOnLaunch,
+        restartInfo,
         showTrayToast,
         setShowTrayToast,
         activePresetId,

@@ -107,7 +107,7 @@ namespace Zapret2App
         private static EventWaitHandle instanceShowEvent;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.4.4";
+        public const string AppVersion = "0.5.0-test";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -120,11 +120,37 @@ namespace Zapret2App
 
         /// <summary>Текущий процесс ядра winws.exe. null, если обход выключен.</summary>
         private Process winws;
+        /// <summary>
+        /// Ядро, пережившее проверку на старте. Падение до неё разбирает сам
+        /// запуск — это ошибка настройки, а не авария, и перезапускать нечего.
+        /// </summary>
+        private Process confirmedCore;
         /// <summary>Последние строки stderr winws — нужны для внятного сообщения об ошибке.</summary>
         private readonly System.Collections.Generic.List<string> lastErrors = new System.Collections.Generic.List<string>();
         private readonly object procLock = new object();
         /// <summary>Останов инициирован пользователем — не считать выход процесса аварией.</summary>
         private bool stopRequested = false;
+
+        // ---- Перезапуск упавшего ядра ------------------------------------
+        // Раньше падение winws молча выключало обход: в журнал строка, кнопка
+        // краснеет, а программа обычно свёрнута в трей — Discord просто
+        // отваливался. Теперь ядро поднимается заново с нарастающей паузой.
+        // Серия ограничена: если ядро падает сразу после каждого запуска,
+        // долбить драйвер бесконечно бессмысленно.
+        /// <summary>Аргументы последнего запуска не из автоподбора — с ними и перезапускаем.</summary>
+        private string lastCoreArgs;
+        private DateTime coreStartedUtc = DateTime.MinValue;
+        /// <summary>Сколько перезапусков подряд уже сделано в текущей серии.</summary>
+        private int coreRestartAttempt = 0;
+        private System.Threading.Timer coreRestartTimer;
+        /// <summary>Растёт при каждой отмене: сработавший таймер старого поколения ничего не делает.</summary>
+        private int coreRestartGen = 0;
+        private static readonly int[] CoreRestartDelaysSec = { 3, 10, 30, 60, 120 };
+        /// <summary>Проработало столько — значит, ядро было здоровым, серия падений начинается заново.</summary>
+        private const int CoreStableSec = 300;
+
+        /// <summary>Процессы других обходчиков: они держат тот же драйвер WinDivert.</summary>
+        private static readonly string[] RivalBypassNames = { "goodbyedpi", "GoodbyeDPI", "zapret", "ByeDPI", "byedpi", "spoofdpi" };
 
         // ---- Файловый лог с ротацией -------------------------------------
         /// <summary>Порог ротации: при превышении лог упаковывается в zip.</summary>
@@ -194,9 +220,31 @@ namespace Zapret2App
         /// </summary>
         private static int DevToolsPort = 0;
 
+        /// <summary>
+        /// Программу запустил Планировщик при входе в Windows (ключ --autostart).
+        /// Окно тогда не показывается — программа сразу уходит в трей.
+        /// </summary>
+        private static bool LaunchedAtLogon = false;
+        /// <summary>Первый показ окна ещё впереди и его надо подавить (запуск при входе).</summary>
+        private bool suppressFirstShow = false;
+        private bool instanceListenerStarted = false;
+
         [STAThread]
         public static void Main(string[] args)
         {
+            foreach (var a in args)
+            {
+                if (string.Equals(a, AutostartArg, StringComparison.OrdinalIgnoreCase)) LaunchedAtLogon = true;
+            }
+
+            if (LaunchedAtLogon)
+            {
+                // Задача создаётся с обычным приоритетом, но если её правили
+                // руками — ядро унаследовало бы «ниже среднего» от нас, а
+                // обработка пакетов под нагрузкой от этого заметно страдает.
+                try { Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.Normal; } catch { }
+            }
+
             if (AppVersion.Contains("-test"))
             {
                 foreach (var a in args)
@@ -366,10 +414,16 @@ namespace Zapret2App
             catch { }
 
             InitLogging();
+            if (LaunchedAtLogon)
+            {
+                suppressFirstShow = true;
+                WriteLogFile("info", "Setup", "Запуск при входе в Windows — окно не показываю, программа в трее.");
+            }
             ExtractResources();
             SetupTray();
             this.Shown += (s, e) => StartInstanceListener();
             InitializeWebView();
+            Task.Run(() => RepointAutostartTask());
 
             // Счётчики уходят в интерфейс раз в секунду и только при изменении,
             // иначе при --debug это был бы ещё один поток сообщений в WebView.
@@ -391,6 +445,29 @@ namespace Zapret2App
             catch { }
 
             this.FormClosing += MainForm_FormClosing;
+        }
+
+        /// <summary>
+        /// При запуске из Планировщика окно не показывается. Первый показ
+        /// делает Application.Run — его и подавляем. Описатель окна всё равно
+        /// создаётся: без него не работают BeginInvoke и WebView2, а интерфейс
+        /// обязан загрузиться — включать обход при запуске умеет только он.
+        /// Следующий Show() — из трея или повторным запуском — показывает
+        /// окно как обычно, тогда же срабатывает и центрирование.
+        /// </summary>
+        protected override void SetVisibleCore(bool value)
+        {
+            if (value && suppressFirstShow)
+            {
+                suppressFirstShow = false;
+                if (!IsHandleCreated) CreateHandle();
+                base.SetVisibleCore(false);
+                // Обычно слушатель стартует по Shown, а его не будет, пока
+                // окно не откроют: повторный запуск exe не показал бы окно.
+                StartInstanceListener();
+                return;
+            }
+            base.SetVisibleCore(value);
         }
 
         protected override void WndProc(ref Message m)
@@ -732,7 +809,8 @@ namespace Zapret2App
                 // иначе интерфейс успеет прочитать пустоту и записать поверх
                 // файла значения по умолчанию.
                 await webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
-                    "window.__zapret_settings = " + LoadSettingsJson() + ";");
+                    "window.__zapret_settings = " + LoadSettingsJson() + ";" +
+                    "window.__zapret_launch = { atLogon: " + (LaunchedAtLogon ? "true" : "false") + " };");
 
                 webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     "app.zapret",
@@ -1449,11 +1527,51 @@ namespace Zapret2App
 
         private void SendStatus(string status, int pid)
         {
+            SendStatus(status, pid, "");
+        }
+
+        /// <param name="extra">Дополнительные поля JSON, начиная с запятой.</param>
+        private void SendStatus(string status, int pid, string extra)
+        {
             // Во время автоподбора ядро перезапускается по разу на вариант.
             // Если пропускать эти статусы в интерфейс, кнопка питания будет
             // семь раз мигать «подключение → работает → остановлено».
             if (autotuneRunning) return;
-            SendToWeb(string.Format("{{\"type\":\"status_change\",\"status\":\"{0}\",\"pid\":{1}}}", status, pid));
+            SendToWeb(string.Format("{{\"type\":\"status_change\",\"status\":\"{0}\",\"pid\":{1}{2}}}", status, pid, extra));
+            UpdateTrayForStatus(status);
+        }
+
+        /// <summary>
+        /// Подсказка значка в трее — состояние обхода словами. Если окно
+        /// спрятано, об ошибке говорит всплывающее сообщение: иначе кнопка
+        /// покраснеет там, где её никто не видит, — например, после запуска
+        /// при входе в Windows или падения ядра посреди игры.
+        /// </summary>
+        private void UpdateTrayForStatus(string status)
+        {
+            if (!IsHandleCreated) return;
+            try
+            {
+                BeginInvoke(new Action(() =>
+                {
+                    if (trayIcon == null || isExiting) return;
+                    try
+                    {
+                        trayIcon.Text = status == "connected" ? "Zapret2 — обход включён"
+                            : status == "restarting" ? "Zapret2 — ядро упало, перезапуск…"
+                            : status == "error" ? "Zapret2 — обход не работает"
+                            : "Zapret2 — обход выключен";
+                        if (status == "error" && !this.Visible)
+                        {
+                            trayIcon.ShowBalloonTip(5000, "Обход не работает",
+                                "Ядро не запустилось или упало. Откройте Zapret2 — подробности в журнале.",
+                                ToolTipIcon.Warning);
+                        }
+                    }
+                    catch { }
+                }));
+            }
+            catch { }
         }
 
         /// <summary>Путь к winws.exe: сначала распакованная копия, затем каталог рядом с приложением.</summary>
@@ -1815,8 +1933,7 @@ namespace Zapret2App
             try
             {
                 var rivals = new System.Collections.Generic.List<string>();
-                string[] names = { "goodbyedpi", "GoodbyeDPI", "zapret", "ByeDPI", "byedpi", "spoofdpi" };
-                foreach (var n in names)
+                foreach (var n in RivalBypassNames)
                 {
                     foreach (var p in Process.GetProcessesByName(n))
                     {
@@ -2581,7 +2698,17 @@ namespace Zapret2App
         /// </summary>
         private void StartZapretProcess(string arguments)
         {
+            StartZapretProcess(arguments, false);
+        }
+
+        /// <param name="isRestart">
+        /// Перезапуск после падения: серия попыток продолжается, а если ядро
+        /// снова умрёт на старте — назначается следующая попытка.
+        /// </param>
+        private void StartZapretProcess(string arguments, bool isRestart)
+        {
             StopZapretProcess(false);
+            if (!isRestart) coreRestartAttempt = 0;
 
             string dir = ResolveWinwsDir();
             if (dir == null)
@@ -2689,20 +2816,39 @@ namespace Zapret2App
                 {
                     SendLog("warn", "Похоже, в системе висит старая служба WinDivert. Пробую удалить её...", "WinDivert");
                     ResetWinDivertService();
-                    SendLog("warn", "Служба WinDivert сброшена. Нажмите Включить ещё раз.", "WinDivert");
+                    SendLog("warn", isRestart
+                        ? "Служба WinDivert сброшена."
+                        : "Служба WinDivert сброшена. Нажмите Включить ещё раз.", "WinDivert");
                 }
                 else if (reason.Length == 0)
                 {
                     SendLog("warn", "Ядро не вернуло текст ошибки. Включите Подробный лог и повторите запуск.", "Runner");
                 }
 
+                // Первый запуск, который упал сразу, — это ошибка настройки,
+                // её показываем как раньше. А при перезапуске пробуем дальше:
+                // драйвер мог ещё не освободиться после падения.
+                if (isRestart && TryScheduleCoreRestart()) return;
+
                 SendStatus("error", 0);
                 return;
             }
 
+            if (!autotuneRunning)
+            {
+                lastCoreArgs = arguments;
+                coreStartedUtc = DateTime.UtcNow;
+            }
+            lock (procLock) { confirmedCore = p; }
+
             SendLog("success", string.Format("winws.exe работает (PID {0})", p.Id), "WinWS");
             SendLog("info", "Драйвер WinDivert загружен, трафик фильтруется.", "WinDivert");
+            if (isRestart) SendLog("success", "Ядро перезапущено — обход снова работает.", "Watchdog");
             SendStatus("connected", p.Id);
+
+            // Умерло между проверкой и этой строкой — событие Exited могло
+            // прийти раньше, чем ядро признано рабочим, и было пропущено.
+            if (p.HasExited) WinwsExited(p, EventArgs.Empty);
         }
 
         private string CollectErrors()
@@ -2719,16 +2865,141 @@ namespace Zapret2App
             Process p = sender as Process;
             lock (procLock)
             {
-                if (!ReferenceEquals(winws, p)) return;
+                if (!ReferenceEquals(winws, p) || !ReferenceEquals(confirmedCore, p)) return;
                 winws = null;
+                confirmedCore = null;
             }
 
             if (stopRequested) return;
 
             int code = 0;
             try { if (p != null) code = p.ExitCode; } catch { }
-            SendLog("error", string.Format("Ядро winws.exe неожиданно завершилось (код {0}). Обход отключён.", code), "Core");
+            // Время работы засекается только для обычных запусков: у варианта
+            // автоподбора оно было бы посчитано от чужого старта.
+            TimeSpan ran = DateTime.UtcNow - coreStartedUtc;
+            SendLog("error", string.Format("Ядро winws.exe неожиданно завершилось (код {0}{1}).",
+                code, autotuneRunning ? "" : ", проработало " + FormatDuration(ran)), "Core");
+
+            // Вариант, уронивший ядро во время автоподбора, отбраковывает сам
+            // подбор — перезапуск ему только помешал бы.
+            if (!autotuneRunning)
+            {
+                if (ran.TotalSeconds >= CoreStableSec) coreRestartAttempt = 0;
+                if (TryScheduleCoreRestart()) return;
+            }
+
+            SendLog("error", "Обход отключён.", "Core");
             SendStatus("error", 0);
+        }
+
+        /// <summary>
+        /// Назначает перезапуск упавшего ядра. false — перезапуска не будет
+        /// (серия исчерпана, работает чужой обходчик, программа закрывается),
+        /// и вызывающий сообщает интерфейсу об ошибке как раньше.
+        /// </summary>
+        private bool TryScheduleCoreRestart()
+        {
+            string args = lastCoreArgs;
+            if (isExiting || string.IsNullOrEmpty(args)) return false;
+
+            int max = CoreRestartDelaysSec.Length;
+            if (coreRestartAttempt >= max)
+            {
+                SendLog("error", string.Format(
+                    "Перезапуск не помог: ядро падает снова и снова ({0} попыток подряд). Больше не пробую — причина в строках журнала выше.",
+                    max), "Watchdog");
+                return false;
+            }
+
+            // Ядро могло умереть, потому что драйвер забрал другой обходчик.
+            // Перезапуск снял бы его (запуск убивает все winws.exe) и начал
+            // бы войну за драйвер.
+            string rival = FindRivalBypass();
+            if (rival != null)
+            {
+                SendLog("warn", "Не перезапускаю ядро: в системе работает " + rival +
+                    ". Два обходчика на одном драйвере WinDivert мешают друг другу — закройте лишний и включите обход снова.", "Watchdog");
+                return false;
+            }
+
+            int delay = CoreRestartDelaysSec[coreRestartAttempt];
+            coreRestartAttempt++;
+            SendLog("warn", string.Format("Перезапуск ядра через {0} с — попытка {1} из {2}.",
+                delay, coreRestartAttempt, max), "Watchdog");
+            SendStatus("restarting", 0, string.Format(",\"delay\":{0},\"attempt\":{1},\"max\":{2}",
+                delay, coreRestartAttempt, max));
+
+            lock (procLock)
+            {
+                if (coreRestartTimer != null) { try { coreRestartTimer.Dispose(); } catch { } }
+                int gen = ++coreRestartGen;
+                coreRestartTimer = new System.Threading.Timer(_ =>
+                {
+                    if (isExiting || !IsHandleCreated) return;
+                    try
+                    {
+                        BeginInvoke(new Action(() =>
+                        {
+                            // Пока ждали, обход выключили или запустили заново.
+                            lock (procLock) { if (gen != coreRestartGen) return; }
+                            if (isExiting) return;
+                            StartZapretProcess(args, true);
+                        }));
+                    }
+                    catch { }
+                }, null, delay * 1000, Timeout.Infinite);
+            }
+            return true;
+        }
+
+        /// <summary>Отменяет назначенный перезапуск: обход выключили, запустили заново или закрывают программу.</summary>
+        private void CancelCoreRestart()
+        {
+            lock (procLock)
+            {
+                coreRestartGen++;
+                if (coreRestartTimer != null)
+                {
+                    try { coreRestartTimer.Dispose(); } catch { }
+                    coreRestartTimer = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Чужой обходчик в системе или null. Вызывается, когда своего ядра
+        /// уже нет, поэтому любой живой winws.exe — чужой.
+        /// </summary>
+        private static string FindRivalBypass()
+        {
+            string found = null;
+            try
+            {
+                foreach (var p in Process.GetProcessesByName("winws"))
+                {
+                    if (found == null) found = "другой winws.exe (PID " + p.Id + ")";
+                    p.Dispose();
+                }
+                foreach (var n in RivalBypassNames)
+                {
+                    foreach (var p in Process.GetProcessesByName(n))
+                    {
+                        if (found == null) found = p.ProcessName;
+                        p.Dispose();
+                    }
+                }
+            }
+            catch { }
+            return found;
+        }
+
+        /// <summary>«2 ч 5 мин», «3 мин 10 с», «8 с» — для журнала.</summary>
+        private static string FormatDuration(TimeSpan t)
+        {
+            if (t.TotalSeconds < 0 || t.TotalDays > 365) return "неизвестно сколько";
+            if (t.TotalHours >= 1) return string.Format("{0} ч {1} мин", (int)t.TotalHours, t.Minutes);
+            if (t.TotalMinutes >= 1) return string.Format("{0} мин {1} с", (int)t.TotalMinutes, t.Seconds);
+            return string.Format("{0} с", (int)t.TotalSeconds);
         }
 
         private void StopZapretProcess()
@@ -2739,12 +3010,14 @@ namespace Zapret2App
         private void StopZapretProcess(bool notify)
         {
             stopRequested = true;
+            CancelCoreRestart();
 
             Process p;
             lock (procLock)
             {
                 p = winws;
                 winws = null;
+                confirmedCore = null;
             }
 
             if (p != null)
@@ -4531,6 +4804,14 @@ namespace Zapret2App
                     {
                         Task.Run(() => EnableTcpTimestamps());
                     }
+                    else if (rawMsg == "autostart_get")
+                    {
+                        Task.Run(() => SendAutostartState(""));
+                    }
+                    else if (rawMsg == "autostart_set:1" || rawMsg == "autostart_set:0")
+                    {
+                        SetAutostart(rawMsg.EndsWith("1"));
+                    }
                     else if (rawMsg == "autotune_cancel")
                     {
                         autotuneCancel = true;
@@ -4662,7 +4943,8 @@ namespace Zapret2App
         /// <summary>Ждёт сигнала от повторного запуска и показывает окно.</summary>
         private void StartInstanceListener()
         {
-            if (instanceShowEvent == null) return;
+            if (instanceShowEvent == null || instanceListenerStarted) return;
+            instanceListenerStarted = true;
             var t = new Thread(delegate()
             {
                 while (!isExiting)
@@ -4683,6 +4965,228 @@ namespace Zapret2App
             t.IsBackground = true;
             t.Name = "single-instance";
             t.Start();
+        }
+
+        // ================= Автозапуск при входе в Windows ======================
+        //
+        // Через Планировщик заданий, а не ключ Run в реестре: программе нужны
+        // права администратора, а программы из Run Windows с повышением прав
+        // не запускает вовсе (или спрашивает UAC при каждом входе). Задача с
+        // «наивысшими правами» стартует сразу повышенной и без вопросов.
+        //
+        // Работаем через COM-интерфейс Планировщика, а не schtasks.exe: тот
+        // пишет вывод в OEM-кодировке, и путь с кириллицей («Мои проекты»)
+        // при чтении превращался бы в кашу. Состояние — сама задача в
+        // Планировщике, а не флажок в настройках: интерфейс показывает то,
+        // что есть на самом деле.
+
+        private const string AutostartArg = "--autostart";
+
+        /// <summary>Имя задачи. С именем пользователя: на одном компьютере их может быть несколько.</summary>
+        private static string AutostartTaskName
+        {
+            get { return "Zapret2 Control Center (" + Environment.UserName + ")"; }
+        }
+
+        private static object ComCall(object target, string method, params object[] args)
+        {
+            return target.GetType().InvokeMember(method, BindingFlags.InvokeMethod, null, target, args);
+        }
+
+        private static object ComGet(object target, string property, params object[] args)
+        {
+            return target.GetType().InvokeMember(property, BindingFlags.GetProperty, null, target, args);
+        }
+
+        private static object OpenTaskRootFolder()
+        {
+            Type t = Type.GetTypeFromProgID("Schedule.Service");
+            if (t == null) throw new InvalidOperationException("служба Планировщика заданий недоступна");
+            object service = Activator.CreateInstance(t);
+            ComCall(service, "Connect");
+            return ComCall(service, "GetFolder", "\\");
+        }
+
+        /// <summary>Ошибка COM, обёрнутая отражением, — достаём настоящую.</summary>
+        private static Exception UnwrapCom(Exception ex)
+        {
+            var tie = ex as TargetInvocationException;
+            return tie != null && tie.InnerException != null ? tie.InnerException : ex;
+        }
+
+        private static bool IsNotFound(Exception ex)
+        {
+            // 0x80070002 — «файл не найден»: такой задачи нет.
+            return Marshal.GetHRForException(UnwrapCom(ex)) == unchecked((int)0x80070002);
+        }
+
+        /// <summary>Есть ли задача автозапуска; path — какой exe она запускает.</summary>
+        private static bool ReadAutostartTask(out string path)
+        {
+            path = "";
+            object folder = OpenTaskRootFolder();
+            object task;
+            try
+            {
+                task = ComCall(folder, "GetTask", AutostartTaskName);
+            }
+            catch (Exception ex)
+            {
+                if (IsNotFound(ex)) return false;
+                throw;
+            }
+            try
+            {
+                object actions = ComGet(ComGet(task, "Definition"), "Actions");
+                path = (ComGet(ComGet(actions, "Item", 1), "Path") as string) ?? "";
+            }
+            catch { }
+            return true;
+        }
+
+        private static string BuildAutostartTaskXml(string exe)
+        {
+            string sid = WindowsIdentity.GetCurrent().User.Value;
+            string dir = Path.GetDirectoryName(exe) ?? "";
+            Func<string, string> esc = s => System.Security.SecurityElement.Escape(s);
+
+            // Важное в настройках: без ExecutionTimeLimit=PT0S Планировщик
+            // снял бы программу через 72 часа, без двух «Batteries» — не
+            // запустил бы ноутбук от батареи. Priority 4 — обычный приоритет
+            // процесса: по умолчанию задачи идут с «ниже среднего», и winws
+            // унаследовал бы его.
+            var sb = new StringBuilder();
+            sb.Append("<?xml version=\"1.0\" encoding=\"UTF-16\"?>");
+            sb.Append("<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">");
+            sb.Append("<RegistrationInfo><Author>Zapret2 Control Center</Author><Description>")
+              .Append(esc("Запуск Zapret2 Control Center при входе в Windows. Включается и выключается в настройках программы."))
+              .Append("</Description></RegistrationInfo>");
+            sb.Append("<Triggers><LogonTrigger><Enabled>true</Enabled><UserId>").Append(sid).Append("</UserId></LogonTrigger></Triggers>");
+            sb.Append("<Principals><Principal id=\"Author\"><UserId>").Append(sid)
+              .Append("</UserId><LogonType>InteractiveToken</LogonType><RunLevel>HighestAvailable</RunLevel></Principal></Principals>");
+            sb.Append("<Settings>");
+            sb.Append("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
+            sb.Append("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
+            sb.Append("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
+            sb.Append("<AllowHardTerminate>true</AllowHardTerminate>");
+            sb.Append("<StartWhenAvailable>false</StartWhenAvailable>");
+            sb.Append("<RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>");
+            sb.Append("<IdleSettings><StopOnIdleEnd>false</StopOnIdleEnd><RestartOnIdle>false</RestartOnIdle></IdleSettings>");
+            sb.Append("<AllowStartOnDemand>true</AllowStartOnDemand>");
+            sb.Append("<Enabled>true</Enabled>");
+            sb.Append("<Hidden>false</Hidden>");
+            sb.Append("<RunOnlyIfIdle>false</RunOnlyIfIdle>");
+            sb.Append("<WakeToRun>false</WakeToRun>");
+            sb.Append("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+            sb.Append("<Priority>4</Priority>");
+            sb.Append("</Settings>");
+            sb.Append("<Actions Context=\"Author\"><Exec><Command>").Append(esc(exe))
+              .Append("</Command><Arguments>").Append(AutostartArg)
+              .Append("</Arguments><WorkingDirectory>").Append(esc(dir))
+              .Append("</WorkingDirectory></Exec></Actions>");
+            sb.Append("</Task>");
+            return sb.ToString();
+        }
+
+        private static void RegisterAutostartTask()
+        {
+            object folder = OpenTaskRootFolder();
+            // 6 = TASK_CREATE_OR_UPDATE, 3 = TASK_LOGON_INTERACTIVE_TOKEN;
+            // учётная запись и пароль не нужны — пользователь указан в XML.
+            ComCall(folder, "RegisterTask", AutostartTaskName,
+                BuildAutostartTaskXml(Application.ExecutablePath), 6, null, null, 3, null);
+        }
+
+        private static void DeleteAutostartTask()
+        {
+            object folder = OpenTaskRootFolder();
+            try
+            {
+                ComCall(folder, "DeleteTask", AutostartTaskName, 0);
+            }
+            catch (Exception ex)
+            {
+                if (!IsNotFound(ex)) throw;
+            }
+        }
+
+        private static bool SamePath(string a, string b)
+        {
+            try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
+        }
+
+        /// <summary>Состояние автозапуска — в интерфейс. error — текст неудачи последнего действия.</summary>
+        private void SendAutostartState(string error)
+        {
+            bool enabled = false;
+            string path = "";
+            try
+            {
+                enabled = ReadAutostartTask(out path);
+            }
+            catch (Exception ex)
+            {
+                if (string.IsNullOrEmpty(error))
+                    error = "Не удалось прочитать задачу Планировщика: " + UnwrapCom(ex).Message;
+            }
+            bool current = !enabled || path.Length == 0 || SamePath(path, Application.ExecutablePath);
+            SendToWeb(string.Format(
+                "{{\"type\":\"autostart\",\"enabled\":{0},\"current\":{1},\"path\":\"{2}\",\"error\":\"{3}\"}}",
+                enabled ? "true" : "false", current ? "true" : "false", JsonEscape(path), JsonEscape(error ?? "")));
+        }
+
+        private void SetAutostart(bool on)
+        {
+            Task.Run(() =>
+            {
+                string error = "";
+                try
+                {
+                    if (on)
+                    {
+                        RegisterAutostartTask();
+                        SendLog("success", "Автозапуск включён: программа будет запускаться при входе в Windows — " +
+                            Application.ExecutablePath, "Autostart");
+                    }
+                    else
+                    {
+                        DeleteAutostartTask();
+                        SendLog("info", "Автозапуск выключен.", "Autostart");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = (on ? "Не удалось включить автозапуск: " : "Не удалось выключить автозапуск: ") + UnwrapCom(ex).Message;
+                    SendLog("error", error, "Autostart");
+                }
+                SendAutostartState(error);
+            });
+        }
+
+        /// <summary>
+        /// При старте: задача запускает файл, которого больше нет (программу
+        /// перенесли или скачали заново в другое место), — переводим её на
+        /// этот. Если тот файл на месте, ничего не трогаем: человек мог
+        /// просто открыть другую копию, например прямо из архива во временной
+        /// папке, и автозапуск не должен молча уехать туда. Такой случай
+        /// интерфейс показывает и предлагает перенастроить.
+        /// </summary>
+        private void RepointAutostartTask()
+        {
+            try
+            {
+                string path;
+                if (!ReadAutostartTask(out path)) return;
+                if (path.Length == 0 || SamePath(path, Application.ExecutablePath) || File.Exists(path)) return;
+                RegisterAutostartTask();
+                WriteLogFile("info", "Autostart", "Файла автозапуска больше нет (" + path +
+                    "), задача переведена на этот: " + Application.ExecutablePath);
+            }
+            catch (Exception ex)
+            {
+                WriteLogFile("warn", "Autostart", "Не удалось проверить задачу автозапуска: " + UnwrapCom(ex).Message);
+            }
         }
 
         /// <summary>Показать окно: из трея, из свёрнутого состояния, поверх остальных.</summary>
@@ -4753,6 +5257,17 @@ namespace Zapret2App
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            // Выключение компьютера и выход из системы прятать в трей нельзя:
+            // отменённое закрытие Windows считает отказом и показывает «это
+            // приложение мешает завершить работу». С автозапуском программа
+            // живёт всегда, и это стало бы видно при каждом выключении.
+            if (e.CloseReason == CloseReason.WindowsShutDown || e.CloseReason == CloseReason.TaskManagerClosing)
+            {
+                isExiting = true;
+                try { if (tgStatusTimer != null) tgStatusTimer.Stop(); } catch { }
+                try { if (tgProxy != null) tgProxy.Stop(); } catch { }
+            }
+
             if (!isExiting)
             {
                 e.Cancel = true;

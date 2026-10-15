@@ -49,7 +49,8 @@ export const Sidebar: React.FC<{ compact?: boolean }> = ({ compact = false }) =>
   ];
 
   const isOn = status === 'connected';
-  const isConnecting = status === 'connecting';
+  // Перезапуск упавшего ядра выглядит как подключение — жёлтая точка.
+  const isConnecting = status === 'connecting' || status === 'restarting';
   const isError = status === 'error';
   const showUpdate = updateInfo.hasUpdate && !updateInfo.isInstalled;
 
@@ -126,7 +127,7 @@ export const Sidebar: React.FC<{ compact?: boolean }> = ({ compact = false }) =>
         )}
 
         <div className={`rounded-[10px] bg-s2 border border-line ${compact ? 'p-2 flex justify-center' : 'p-2.5'}`}
-          title={compact ? (isOn ? 'Обход включён' : isConnecting ? 'Подключение…' : isError ? 'Ошибка запуска' : 'Обход выключен') : undefined}
+          title={compact ? (isOn ? 'Обход включён' : status === 'restarting' ? 'Перезапуск ядра…' : isConnecting ? 'Подключение…' : isError ? 'Ошибка запуска' : 'Обход выключен') : undefined}
         >
           {compact ? (
             <StatusDot status={isOn ? 'ok' : isConnecting ? 'warn' : isError ? 'bad' : 'neutral'} pulse={isOn || isConnecting} size={9} />
@@ -135,6 +136,7 @@ export const Sidebar: React.FC<{ compact?: boolean }> = ({ compact = false }) =>
               <StatusDot status={isOn ? 'ok' : isConnecting ? 'warn' : isError ? 'bad' : 'neutral'} pulse={isOn || isConnecting} size={8} />
               <span className={`text-[12px] font-medium truncate ${isOn ? 'text-t1' : isError ? 'text-red-300' : 'text-t2'}`}>
                 {isOn ? `Обход включён · ${formatUptimeShort(stats.uptimeSeconds, true)}`
+                  : status === 'restarting' ? 'Перезапуск ядра…'
                   : isConnecting ? 'Подключение…'
                   : isError ? 'Ошибка запуска ядра'
                   : 'Обход выключен'}

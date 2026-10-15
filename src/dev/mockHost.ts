@@ -20,7 +20,10 @@
  *   ?mock=free     — блокировки нет, всё открывается без обхода;
  *   ?mock=rival    — запущен другой обходчик;
  *   ?mock=address  — первый адрес цели молчит при любом обходе, подбор
- *                    меняет адрес и находит вариант со второго круга.
+ *                    меняет адрес и находит вариант со второго круга;
+ *   ?mock=crash    — через 4 с после включения ядро «падает», ждёт
+ *                    перезапуска 3 с и поднимается снова;
+ *   ?mock=moved    — автозапуск включён, но открывает другой файл программы.
  *
  * Скорость: вариант проверяется за ~0,7-1,2 с вместо 4-13 с в жизни.
  */
@@ -65,6 +68,9 @@ export function installMockHost(): void {
       });
     }
     send({ type: 'preflight', items });
+    // Нативная часть шлёт маршрут вместе с проверкой — по нему, в частности,
+    // срабатывает включение обхода при запуске.
+    send({ type: 'net_route', ifIdx: 7, name: 'Ethernet', isTunnel: false, physIfIdx: 7, physName: 'Ethernet' });
   };
 
   /**
@@ -166,6 +172,35 @@ export function installMockHost(): void {
     })();
   };
 
+  // Автозапуск: состояние задачи Планировщика.
+  let autostartOn = scenario === 'moved';
+  const autostartState = (error = '') => send({
+    type: 'autostart', enabled: autostartOn,
+    current: scenario !== 'moved',
+    path: autostartOn ? String.raw`C:\Users\user\Downloads\Zapret2-GUI-v0.4.4-portable.exe` : '',
+    error
+  });
+
+  // Ядро: в сценарии crash падает и поднимается заново, как в нативной части.
+  let engineTimers: number[] = [];
+  const clearEngine = () => { engineTimers.forEach(t => clearTimeout(t)); engineTimers = []; };
+  const log = (level: string, message: string, source: string) =>
+    send({ type: 'log', level, message, source, timestamp: new Date().toTimeString().split(' ')[0] });
+  const startEngine = () => {
+    clearEngine();
+    engineTimers.push(window.setTimeout(() => send({ type: 'status_change', status: 'connected', pid: 4242 }), 500));
+    if (scenario !== 'crash') return;
+    engineTimers.push(window.setTimeout(() => {
+      log('error', 'Ядро winws.exe неожиданно завершилось (код 3221225477, проработало 4 с).', 'Core');
+      log('warn', 'Перезапуск ядра через 3 с — попытка 1 из 5.', 'Watchdog');
+      send({ type: 'status_change', status: 'restarting', pid: 0, delay: 3, attempt: 1, max: 5 });
+    }, 4500));
+    engineTimers.push(window.setTimeout(() => {
+      log('success', 'Ядро перезапущено — обход снова работает.', 'Watchdog');
+      send({ type: 'status_change', status: 'connected', pid: 4243 });
+    }, 7500));
+  };
+
   const tgStatus = () => send({
     type: 'tg_status', running: tgRunning, host: '127.0.0.1', port: 1443, linkHost: '127.0.0.1', error: '',
     stats: { total: 0, active: 0, bad: 0, ws: 0, cf: 0, tcp: 0, failed: 0, bytesUp: 0, bytesDown: 0 }
@@ -184,8 +219,12 @@ export function installMockHost(): void {
     else if (raw === 'tg_stop') { tgRunning = false; tgStatus(); }
     else if (raw === 'tg_status') tgStatus();
     else if (raw.startsWith('tg_open:')) console.info('[mock] Telegram открыл бы ссылку:', raw.slice(8));
-    else if (raw.startsWith('start_engine:')) setTimeout(() => send({ type: 'status_change', status: 'connected', pid: 4242 }), 500);
-    else if (raw === 'stop_engine') setTimeout(() => send({ type: 'status_change', status: 'disconnected', pid: 0 }), 300);
+    else if (raw.startsWith('start_engine:')) startEngine();
+    else if (raw === 'stop_engine') { clearEngine(); setTimeout(() => send({ type: 'status_change', status: 'disconnected', pid: 0 }), 300); }
+    else if (raw === 'autostart_get') setTimeout(() => autostartState(), 200);
+    else if (raw.startsWith('autostart_set:')) {
+      setTimeout(() => { autostartOn = raw.endsWith('1'); autostartState(); }, 500);
+    }
     else if (raw.startsWith('open_url:')) console.info('[mock] Открыл бы адрес:', raw.slice(9));
   };
 

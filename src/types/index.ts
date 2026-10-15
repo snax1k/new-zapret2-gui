@@ -1,4 +1,8 @@
-export type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+/**
+ * restarting — ядро упало и нативная часть перезапустит его через паузу
+ * (подробности — CoreRestartInfo). Кнопка в этом состоянии выключает обход.
+ */
+export type AppStatus = 'disconnected' | 'connecting' | 'connected' | 'error' | 'restarting';
 
 export type TabType = 'dashboard' | 'autotune' | 'presets' | 'hostlists' | 'tgproxy' | 'diagnostics' | 'logs' | 'settings';
 
@@ -105,6 +109,29 @@ export interface DiscordCacheItem {
   dirs: number;
   /** Запущен ли сейчас — пока процесс жив, файлы заблокированы. */
   running: boolean;
+}
+
+/** Назначенный перезапуск упавшего ядра. */
+export interface CoreRestartInfo {
+  /** Номер попытки, начиная с 1. */
+  attempt: number;
+  max: number;
+  /** Пауза перед попыткой, секунды. */
+  delaySec: number;
+}
+
+/** Автозапуск при входе в Windows — состояние задачи в Планировщике. */
+export interface AutostartState {
+  /** Ответ нативной части уже пришёл. До него переключатель неактивен. */
+  known: boolean;
+  enabled: boolean;
+  /** Задача запускает именно этот файл программы. */
+  current: boolean;
+  /** Какой exe запускает задача. */
+  path: string;
+  /** Идёт включение или выключение. */
+  busy: boolean;
+  error: string;
 }
 
 /**
