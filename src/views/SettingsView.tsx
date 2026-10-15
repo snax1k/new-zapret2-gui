@@ -6,6 +6,7 @@ import {
 import { useApp, BUNDLED_CORE_VERSION, APP_VERSION } from '../context/AppContext';
 import { ACCENTS, BACKGROUNDS } from '../lib/theme';
 import { Button, Card, CardHead, Note, Toggle } from '../components/ui';
+import { AppLogo } from '../components/AppLogo';
 
 /** Размер в человеческом виде: нативная часть шлёт байты. */
 const formatSize = (bytes: number): string => {
@@ -270,7 +271,10 @@ export const SettingsView: React.FC = () => {
       {/* О программе */}
       <Card className="px-4 py-2.5 flex items-center justify-between gap-3 text-[12px]">
         <div className="flex items-center gap-4 text-t2 flex-wrap">
-          <span><strong className="text-t1">О программе:</strong> v{APP_VERSION}</span>
+          <span className="flex items-center gap-2">
+            <AppLogo className="w-5 h-5 shrink-0" />
+            <span><strong className="text-t1">О программе:</strong> v{APP_VERSION}</span>
+          </span>
           <span>Ядро zapret {BUNDLED_CORE_VERSION}</span>
           <span>Драйвер WinDivert 2.2</span>
           <span>Права администратора — встроены в .exe</span>

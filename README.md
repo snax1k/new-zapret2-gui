@@ -338,6 +338,30 @@ powershell -ExecutionPolicy Bypass -File scripts\verify_args.ps1
 (`scripts/dump_strategies.mjs`), поэтому проверяется ровно то, что попадёт в
 exe. Нужны права администратора и node.
 
+### Значок
+
+Значок «Z2» нарисован в SVG: [`assets/icon/`](assets/icon/). `icon.svg` —
+основной рисунок (кадры от 32 px), `icon-16.svg`, `icon-20.svg`,
+`icon-24.svg` — упрощённые варианты под пиксельную сетку: трей и заголовок
+окна при масштабе 100–150 %. Уменьшенный с 256 рисунок в этих размерах
+расплывается в пятно.
+
+```powershell
+npm i --no-save @resvg/resvg-js@2.6.2
+node scripts/make_icon.mjs
+```
+
+Скрипт собирает `app.ico` (9 кадров, 16–256 px) и кладёт `public/logo.svg`
+(иконка вкладки в режиме разработки). Генератор не входит в зависимости
+проекта: значок меняется редко, а сборке нужен только готовый `app.ico`.
+
+Нативная часть берёт значок через `SHDefExtractIcon` нужного размера
+(`LoadAppIcon` в `NativeApp.cs`), а не `Icon.ExtractAssociatedIcon` — тот
+отдаёт только 32 px, и Windows ужимает его в трей. `new Icon("app.ico")` не
+годится: .NET Framework не понимает PNG-кадры. В интерфейсе тот же рисунок —
+[`src/components/AppLogo.tsx`](src/components/AppLogo.tsx), двойка там
+окрашена в цвет акцента.
+
 ---
 
 ## Структура репозитория
@@ -347,7 +371,8 @@ exe. Нужны права администратора и node.
 | `MEMORY.md` | правила ядра, история багов, смысл параметров пресета |
 | `src/` | React + TypeScript интерфейс: `views/` — экраны, `components/` — части экранов и `ui.tsx` (дизайн-система), `lib/` — сборка команды ядра, тема, подбор, `context/` — состояние и связь с нативной частью |
 | `src-native/` | `NativeApp.cs` — WinForms-хост, WebView2, запуск ядра, логи, IPC; `TgProxy.cs` — мост Telegram; `ChromeHello.cs` — проба автоподбора |
-| `scripts/` | сборка, проверка (`verify_args.ps1`, `dump_strategies.mjs`), публикация релиза |
+| `scripts/` | сборка, проверка (`verify_args.ps1`, `dump_strategies.mjs`), значок (`make_icon.mjs`), публикация релиза |
+| `assets/icon/` | исходники значка «Z2» в SVG |
 | `bin/` | ядро zapret и фейковые пейлоады (вшиваются в exe) |
 | `host-list/` | списки доменов и подсетей (вшиваются в exe) |
 | `packages/webview2/` | три библиотеки WebView2, нужные компилятору |

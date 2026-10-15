@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="24" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#23242A"/>
+      <stop offset="1" stop-color="#121316"/>
+    </linearGradient>
+  </defs>
+  <rect width="24" height="24" rx="5" fill="url(#tile)"/>
+  <path fill="#F0F0F3" d="M3 6H11V9L7 15H11V18H3V15L7 9H3Z"/>
+  <path fill="#A194FF" d="M13 6H17.5A3.5 3.5 0 0 1 21 9.5V10.5L18 15H21V18H13L18 10.5V9.5A0.5 0.5 0 0 0 17.5 9H13Z"/>
+</svg>

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Shield, Minus, Square, Copy, X } from 'lucide-react';
+import { Minus, Square, Copy, X } from 'lucide-react';
+import { AppLogo } from './AppLogo';
 import { useApp, APP_VERSION } from '../context/AppContext';
 import { flushSettings } from '../lib/settings';
 
@@ -69,9 +70,7 @@ export const TitleBar: React.FC = () => {
     >
       <div className="flex items-center gap-2 pointer-events-none min-w-0">
         <div className="flex items-center gap-2 pr-1">
-          <div className="w-5 h-5 rounded-[6px] flex items-center justify-center bg-ac/[0.18] border border-ac/40">
-            <Shield className="w-3 h-3 text-ac" />
-          </div>
+          <AppLogo className="w-5 h-5 shrink-0" />
           <span className="font-semibold tracking-wider text-[12px] text-t1">ZAPRET 2</span>
         </div>
 

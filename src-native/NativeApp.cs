@@ -43,6 +43,47 @@ namespace Zapret2App
         [DllImport("user32.dll")]
         private static extern bool AllowSetForegroundWindow(int dwProcessId);
 
+        // ---- Значок -----------------------------------------------------------
+        //
+        // Icon.ExtractAssociatedIcon отдаёт только кадр 32 px, и Windows ужимает
+        // его в трей — «Z2» расплывается. В app.ico мелкие кадры (16, 20, 24)
+        // нарисованы под свою пиксельную сетку; SHDefExtractIcon достаёт кадр
+        // ровно нужного размера (и понимает PNG-кадры, в отличие от new Icon).
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SHDefExtractIcon(string pszIconFile, int iIndex, uint uFlags,
+            out IntPtr phiconLarge, out IntPtr phiconSmall, uint nIconSize);
+
+        [DllImport("user32.dll")]
+        private static extern int GetSystemMetrics(int nIndex);
+
+        [DllImport("user32.dll")]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
+        private const int SM_CXICON = 11;
+        private const int SM_CXSMICON = 49;
+
+        /// <summary>
+        /// Значок программы размером под текущий масштаб экрана: обычный
+        /// (окно, Alt+Tab) или маленький (трей). Описатель не освобождается —
+        /// значков два на всё время жизни процесса.
+        /// </summary>
+        private static Icon LoadAppIcon(bool small)
+        {
+            try
+            {
+                int size = GetSystemMetrics(small ? SM_CXSMICON : SM_CXICON);
+                IntPtr large, unused;
+                if (size > 0 && SHDefExtractIcon(Application.ExecutablePath, 0, 0,
+                        out large, out unused, (uint)(size | (size << 16))) == 0 && large != IntPtr.Zero)
+                {
+                    if (unused != IntPtr.Zero) DestroyIcon(unused);
+                    return Icon.FromHandle(large);
+                }
+            }
+            catch { }
+            return Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        }
+
         // ---- Один экземпляр ------------------------------------------------
         //
         // Вторая копия программы убивала обход первой. При старте Main снимает
@@ -66,7 +107,7 @@ namespace Zapret2App
         private static EventWaitHandle instanceShowEvent;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.4.3";
+        public const string AppVersion = "0.4.4-test";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -320,7 +361,7 @@ namespace Zapret2App
             
             try
             {
-                this.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                this.Icon = LoadAppIcon(false);
             }
             catch { }
 
@@ -4699,7 +4740,7 @@ namespace Zapret2App
                 trayIcon.Text = "Zapret2 Control Center";
                 try
                 {
-                    trayIcon.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                    trayIcon.Icon = LoadAppIcon(true);
                 }
                 catch { }
                 trayIcon.ContextMenu = trayMenu;
