@@ -3,7 +3,7 @@
 #  Запуск:  powershell -ExecutionPolicy Bypass -File scripts\build.ps1
 # =====================================================================
 param(
-    [string]$Version = "0.5.0"
+    [string]$Version = "0.5.1-test"
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,6 +92,11 @@ Compress-Archive -Path $binFiles -DestinationPath "bin.zip" -CompressionLevel Op
 # Списки доменов лежат отдельно от ядра: bin\ и dist\ приложение сносит и
 # раскладывает заново при смене версии, а в host-list\ рядом с поставляемыми
 # списками живут пользовательские файлы, которые затирать нельзя.
+# lists.json — номер версии списков и SHA-256 каждого файла: по нему
+# программа обновляет списки из репозитория без новой версии. Если списки
+# менялись, скрипт поднимет версию — закоммитьте lists.json вместе с ними.
+& node "scripts\lists_manifest.mjs"
+if ($LASTEXITCODE -ne 0) { throw "Не удалось обновить host-list\lists.json" }
 if (Test-Path "lists.zip") { Remove-Item "lists.zip" -Force }
 $listFiles = Get-ChildItem "host-list" -File | Where-Object { $_.Name -notlike "*-user.txt" } | ForEach-Object { $_.FullName }
 Compress-Archive -Path $listFiles -DestinationPath "lists.zip" -CompressionLevel Optimal

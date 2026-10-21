@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "updated": "2026-10-15",
+  "files": [
+    {
+      "name": "list-general.txt",
+      "sha256": "cb78f4f839b2ac503ababa185199bd0e2932536edec47216390952747734c555",
+      "domains": 83
+    },
+    {
+      "name": "list-google.txt",
+      "sha256": "2ba93d814dca7b55e69ab88b33ba36b6e9930596af2add4fa2fdb98ba0cac7f4",
+      "domains": 20
+    },
+    {
+      "name": "list-exclude.txt",
+      "sha256": "30a67f4af8eb7abe709db84235e1d97924d851bf4380b676a109dbe408d446e9",
+      "domains": 128
+    }
+  ]
+}

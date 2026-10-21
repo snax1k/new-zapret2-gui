@@ -23,7 +23,9 @@
  *                    меняет адрес и находит вариант со второго круга;
  *   ?mock=crash    — через 4 с после включения ядро «падает», ждёт
  *                    перезапуска 3 с и поднимается снова;
- *   ?mock=moved    — автозапуск включён, но открывает другой файл программы.
+ *   ?mock=moved    — автозапуск включён, но открывает другой файл программы;
+ *   ?mock=lists    — в репозитории есть списки сайтов новее встроенных;
+ *   ?mock=offline  — GitHub недоступен, проверка списков падает.
  *
  * Скорость: вариант проверяется за ~0,7-1,2 с вместо 4-13 с в жизни.
  */
@@ -201,6 +203,25 @@ export function installMockHost(): void {
     }, 7500));
   };
 
+  // Списки сайтов: встроенная версия 1, в репозитории — 2 (сценарий lists).
+  let lists = { version: 1, updated: '2026-10-15', source: 'builtin', domains: 103 };
+  const listsInfo = (result = '', error = '') =>
+    send({ type: 'lists_info', ...lists, builtinVersion: 1, result, error });
+  const listsCheck = (manual: boolean) => setTimeout(() => {
+    if (scenario === 'offline') {
+      listsInfo('error', 'нет связи с GitHub (Невозможно разрешить удалённое имя)');
+      return;
+    }
+    if (scenario === 'lists' && lists.version === 1) {
+      lists = { version: 2, updated: '2026-10-20', source: 'update', domains: 109 };
+      log('success', 'Списки сайтов обновлены: версия 2 от 2026-10-20 (была 1). Ядро подхватит их само, перезапуск не нужен.', 'Lists');
+      listsInfo('updated');
+      return;
+    }
+    if (manual) log('info', `Списки сайтов актуальны: версия ${lists.version}.`, 'Lists');
+    listsInfo('up_to_date');
+  }, 900);
+
   const tgStatus = () => send({
     type: 'tg_status', running: tgRunning, host: '127.0.0.1', port: 1443, linkHost: '127.0.0.1', error: '',
     stats: { total: 0, active: 0, bad: 0, ws: 0, cf: 0, tcp: 0, failed: 0, bytesUp: 0, bytesDown: 0 }
@@ -222,6 +243,13 @@ export function installMockHost(): void {
     else if (raw.startsWith('start_engine:')) startEngine();
     else if (raw === 'stop_engine') { clearEngine(); setTimeout(() => send({ type: 'status_change', status: 'disconnected', pid: 0 }), 300); }
     else if (raw === 'autostart_get') setTimeout(() => autostartState(), 200);
+    else if (raw === 'lists_info') setTimeout(() => listsInfo(), 150);
+    else if (raw.startsWith('lists_check:')) listsCheck(raw.endsWith('manual'));
+    else if (raw === 'lists_reset') setTimeout(() => {
+      lists = { version: 1, updated: '2026-10-15', source: 'builtin', domains: 103 };
+      log('info', 'Списки сайтов возвращены к встроенным в программу.', 'Lists');
+      listsInfo('reset');
+    }, 400);
     else if (raw.startsWith('autostart_set:')) {
       setTimeout(() => { autostartOn = raw.endsWith('1'); autostartState(); }, 500);
     }

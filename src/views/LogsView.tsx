@@ -111,7 +111,7 @@ export const LogsView: React.FC = () => {
           </Button>
           <Button variant="secondary" size="sm" icon={copied ? Check : Copy} onClick={copyAll}>{copied ? 'Скопировано' : 'Копировать'}</Button>
           <Button variant="secondary" size="sm" icon={Trash2} onClick={clearLogs}>Очистить</Button>
-          <Button variant="secondary" size="sm" icon={FolderOpen} onClick={openLogsFolder} title="Полный журнал пишется в файл с ротацией и упаковкой в zip">
+          <Button variant="secondary" size="sm" icon={FolderOpen} onClick={openLogsFolder} title="zapret2.log — события программы и сводка работы ядра раз в 10 минут, хранится долго. winws-trace.log — подробный поток ядра за последний час.">
             Папка журналов
           </Button>
         </div>

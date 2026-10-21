@@ -107,7 +107,7 @@ namespace Zapret2App
         private static EventWaitHandle instanceShowEvent;
 
         /// <summary>Версия сборки. Показывается в логе и в заголовке окна.</summary>
-        public const string AppVersion = "0.5.0";
+        public const string AppVersion = "0.5.1-test";
 
         private WebView2 webView;
         private NotifyIcon trayIcon;
@@ -179,6 +179,34 @@ namespace Zapret2App
         private int uiLogSecond = -1;
         private int uiLogCount = 0;
         private int uiLogImportantCount = 0;
+
+        // ---- Трассировка ядра — отдельным файлом -------------------------
+        // С --debug ядро печатает каждую проверку списка, каждое поле TLS и
+        // заголовок пакета: 10 МБ за 20 минут. В общем журнале это затирало
+        // всё остальное — десять архивов вмещали три часа, а с автозапуском
+        // программа работает сутками. Теперь поток ядра пишется в свой
+        // кольцевой файл (два по 10 МБ, примерно последний час), а в
+        // zapret2.log попадают запуск ядра, его ошибки и сводка раз в 10 минут.
+        private const long TRACE_MAX_BYTES = 10L * 1024 * 1024;
+        private string traceFilePath;
+        private StreamWriter traceWriter;
+        private long traceBytes;
+        private readonly System.Collections.Concurrent.ConcurrentQueue<string> traceQueue =
+            new System.Collections.Concurrent.ConcurrentQueue<string>();
+        /// <summary>Строки ядра первых секунд после запуска — настройки и профили — идут и в общий журнал.</summary>
+        private const int CORE_STARTUP_LINES = 300;
+        private const int CORE_STARTUP_SEC = 5;
+        private DateTime coreOutputSinceUtc = DateTime.MinValue;
+        private int coreStartupLines = 0;
+        /// <summary>Ядро запущено с --debug: счётчики и трассировка есть.</summary>
+        private volatile bool coreDebug = false;
+        private const int ACTIVITY_SUMMARY_MIN = 10;
+        private DateTime lastSummaryUtc = DateTime.MinValue;
+        private long lastSummaryDesync = 0;
+        /// <summary>Сайты, впервые распознанные с прошлой сводки (не больше 40 имён).</summary>
+        private readonly System.Collections.Generic.List<string> hostsSinceSummary =
+            new System.Collections.Generic.List<string>();
+        private int hostsSinceSummaryMore = 0;
 
         // ---- Счётчик реальной работы обхода ------------------------------
         // Четыре карточки на главной (драйвер, профили, PID, аптайм) отвечают
@@ -676,6 +704,8 @@ namespace Zapret2App
                 // Пользовательские файлы (list-user.txt, list-exclude-user.txt) в
                 // архив не входят, поэтому распаковка их не затирает.
                 ExtractZipResource(assembly, "lists.zip", listsPath);
+                // Скачанные из репозитория списки — поверх встроенных, если новее.
+                ApplyListsOverlay();
 
                 MigrateLegacyUserLists();
                 EnsureUserLists();
@@ -850,9 +880,15 @@ namespace Zapret2App
 
         private void SendLog(string level, string message, string source = "WinWS")
         {
-            // В файл попадает всё, включая пакетный вывод winws --debug.
+            // В zapret2.log — события программы. Поток ядра идёт мимо, в
+            // winws-trace.log (HandleWinwsOutput).
             WriteLogFile(level, source, message);
+            SendUiLog(level, message, source);
+        }
 
+        /// <summary>Строка только в «Журнал» интерфейса, без записи в zapret2.log.</summary>
+        private void SendUiLog(string level, string message, string source)
+        {
             if (!AllowUiLog(level)) return;
 
             string time = DateTime.Now.ToString("HH:mm:ss");
@@ -873,6 +909,7 @@ namespace Zapret2App
                 if (!Directory.Exists(logDir)) Directory.CreateDirectory(logDir);
 
                 logFilePath = Path.Combine(logDir, "zapret2.log");
+                traceFilePath = Path.Combine(logDir, "winws-trace.log");
                 OpenLogWriter();
 
                 logThread = new Thread(LogPump);
@@ -880,7 +917,8 @@ namespace Zapret2App
                 logThread.Start();
 
                 WriteLogFile("info", "Logger", string.Format(
-                    "=== Zapret2 Control Center v{0} запущен, лог: {1} ===", AppVersion, logFilePath));
+                    "=== Zapret2 Control Center v{0} запущен, лог: {1} (поток ядра — winws-trace.log) ===",
+                    AppVersion, logFilePath));
             }
             catch { }
         }
@@ -904,6 +942,15 @@ namespace Zapret2App
             try { logSignal.Set(); } catch { }
         }
 
+        /// <summary>Строка вывода ядра — в файл трассировки. Вызывается из любых потоков.</summary>
+        private void WriteTraceLine(string message)
+        {
+            if (traceFilePath == null) return;
+            if (traceQueue.Count > LOG_QUEUE_MAX) return;
+            traceQueue.Enqueue(string.Format("{0:yyyy-MM-dd HH:mm:ss.fff} {1}", DateTime.Now, message));
+            try { logSignal.Set(); } catch { }
+        }
+
         /// <summary>Фоновая запись: разгружает чтение stdout winws от дисковых операций.</summary>
         private void LogPump()
         {
@@ -913,32 +960,100 @@ namespace Zapret2App
                 logSignal.WaitOne(500);
                 logSignal.Reset();
 
-                sb.Length = 0;
-                int n = 0;
-                string line;
-                while (n < 2000 && logQueue.TryDequeue(out line))
-                {
-                    sb.Append(line).Append("\r\n");
-                    n++;
-                }
-                if (n == 0) continue;
+                // Пачками по 2000 строк; если в очереди осталось — сразу на
+                // следующий круг, не дожидаясь сигнала.
+                if (DrainLogQueue(logQueue, sb, false) | DrainLogQueue(traceQueue, sb, true))
+                    try { logSignal.Set(); } catch { }
+            }
 
-                try
+            DrainLogQueue(logQueue, sb, false);
+            DrainLogQueue(traceQueue, sb, true);
+            try
+            {
+                lock (this)
                 {
-                    lock (this)
+                    if (logWriter != null) { logWriter.Flush(); logWriter.Dispose(); logWriter = null; }
+                    if (traceWriter != null) { traceWriter.Flush(); traceWriter.Dispose(); traceWriter = null; }
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>Пишет пачку строк из очереди. true — в очереди ещё остались строки.</summary>
+        private bool DrainLogQueue(System.Collections.Concurrent.ConcurrentQueue<string> queue, StringBuilder sb, bool trace)
+        {
+            sb.Length = 0;
+            int n = 0;
+            string line;
+            while (n < 2000 && queue.TryDequeue(out line))
+            {
+                sb.Append(line).Append("\r\n");
+                n++;
+            }
+            if (n == 0) return false;
+
+            try
+            {
+                lock (this)
+                {
+                    string chunk = sb.ToString();
+                    int bytes = Encoding.UTF8.GetByteCount(chunk);
+                    if (trace)
                     {
-                        if (logWriter == null) continue;
-                        logWriter.Write(sb.ToString());
+                        if (traceWriter == null) OpenTraceWriter();
+                        if (traceWriter == null) return !queue.IsEmpty;
+                        traceWriter.Write(chunk);
+                        traceWriter.Flush();
+                        traceBytes += bytes;
+                        if (traceBytes >= TRACE_MAX_BYTES) RotateTrace();
+                    }
+                    else
+                    {
+                        if (logWriter == null) return !queue.IsEmpty;
+                        logWriter.Write(chunk);
                         logWriter.Flush();
-                        logBytes += Encoding.UTF8.GetByteCount(sb.ToString());
+                        logBytes += bytes;
                         if (logBytes >= LOG_MAX_BYTES) RotateLog();
                     }
                 }
-                catch { }
             }
-
-            try { lock (this) { if (logWriter != null) { logWriter.Flush(); logWriter.Dispose(); logWriter = null; } } }
             catch { }
+            return !queue.IsEmpty;
+        }
+
+        private void OpenTraceWriter()
+        {
+            try
+            {
+                var fs = new FileStream(traceFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                traceBytes = fs.Length;
+                traceWriter = new StreamWriter(fs, new UTF8Encoding(false));
+                traceWriter.AutoFlush = false;
+            }
+            catch { traceWriter = null; }
+        }
+
+        /// <summary>
+        /// Кольцо из двух файлов: текущий переезжает в winws-trace.1.log,
+        /// прежний .1 удаляется. Без zip: трассировка нужна на последний час,
+        /// а упаковка каждые 20 минут — лишняя работа процессора.
+        /// </summary>
+        private void RotateTrace()
+        {
+            try
+            {
+                traceWriter.Flush();
+                traceWriter.Dispose();
+                traceWriter = null;
+                string old = Path.Combine(logDir, "winws-trace.1.log");
+                if (File.Exists(old)) File.Delete(old);
+                File.Move(traceFilePath, old);
+            }
+            catch { }
+            finally
+            {
+                OpenTraceWriter();
+            }
         }
 
         /// <summary>Закрывает текущий лог, упаковывает его в zip и начинает новый.</summary>
@@ -2600,7 +2715,12 @@ namespace Zapret2App
                 if (host.Length == 0 || host.Length > 253) return;
                 lock (activityLock)
                 {
-                    if (seenHosts.Add(host)) hostnameCount = seenHosts.Count;
+                    if (seenHosts.Add(host))
+                    {
+                        hostnameCount = seenHosts.Count;
+                        if (hostsSinceSummary.Count < 40) hostsSinceSummary.Add(host);
+                        else hostsSinceSummaryMore++;
+                    }
                 }
             }
         }
@@ -2608,14 +2728,23 @@ namespace Zapret2App
         private void ResetActivity()
         {
             Interlocked.Exchange(ref desyncCount, 0);
-            lock (activityLock) { seenHosts.Clear(); hostnameCount = 0; }
+            lock (activityLock)
+            {
+                seenHosts.Clear();
+                hostnameCount = 0;
+                hostsSinceSummary.Clear();
+                hostsSinceSummaryMore = 0;
+            }
             lastSentDesync = -1;
             lastSentHosts = -1;
+            lastSummaryDesync = 0;
+            lastSummaryUtc = DateTime.UtcNow;
         }
 
         /// <summary>Отправляет счётчики в интерфейс, только если они изменились.</summary>
         private void PushActivity()
         {
+            MaybeWriteActivitySummary();
             if (autotuneRunning) return;
 
             long d = Interlocked.Read(ref desyncCount);
@@ -2668,6 +2797,8 @@ namespace Zapret2App
             // выше уже получили строку — они работают по полному потоку.
             if (!isError && IsPacketNoise(line)) return;
 
+            WriteTraceLine(line);
+
             string lower = line.ToLowerInvariant();
             // Эвристика намеренно узкая: с --debug ядро печатает тысячи строк
             // о пакетах, и широкий поиск слова "error" красил бы половину лога.
@@ -2686,10 +2817,73 @@ namespace Zapret2App
                 }
                 SendLog("error", line, "WinWS");
             }
-            else
+            else if (InCoreStartupWindow())
             {
+                // Настройки, профили, фильтр WinDivert — то, что нужно при
+                // разборе любого случая, — остаются и в общем журнале.
                 SendLog("info", line, "WinWS");
             }
+            else
+            {
+                SendUiLog("info", line, "WinWS");
+            }
+        }
+
+        /// <summary>Первые секунды после запуска ядра (не во время автоподбора).</summary>
+        private bool InCoreStartupWindow()
+        {
+            if (autotuneRunning) return false;
+            if ((DateTime.UtcNow - coreOutputSinceUtc).TotalSeconds > CORE_STARTUP_SEC) return false;
+            return Interlocked.Increment(ref coreStartupLines) <= CORE_STARTUP_LINES;
+        }
+
+        /// <summary>
+        /// Сводка в общий журнал: ядро живо, сколько обработало, какие сайты
+        /// появились. С --debug — раз в 10 минут, без него — раз в час: счётчиков
+        /// тогда нет, но видно, что ядро работало. Вызывается таймером раз в секунду.
+        /// </summary>
+        private void MaybeWriteActivitySummary()
+        {
+            if (autotuneRunning) return;
+            lock (procLock) { if (confirmedCore == null) return; }
+
+            DateTime now = DateTime.UtcNow;
+            int periodMin = coreDebug ? ACTIVITY_SUMMARY_MIN : 60;
+            if ((now - lastSummaryUtc).TotalMinutes < periodMin) return;
+            lastSummaryUtc = now;
+
+            string uptime = FormatDuration(now - coreStartedUtc);
+            if (!coreDebug)
+            {
+                WriteLogFile("info", "Core", "Ядро работает " + uptime + ". Счётчиков нет — подробный журнал выключен.");
+                return;
+            }
+
+            long d = Interlocked.Read(ref desyncCount);
+            long delta = d - lastSummaryDesync;
+            lastSummaryDesync = d;
+            string[] fresh;
+            int more, total;
+            lock (activityLock)
+            {
+                fresh = hostsSinceSummary.ToArray();
+                more = hostsSinceSummaryMore;
+                total = seenHosts.Count;
+                hostsSinceSummary.Clear();
+                hostsSinceSummaryMore = 0;
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendFormat("Ядро работает {0}: за {1} мин обработано соединений {2} (всего {3}), сайтов распознано {4}",
+                uptime, periodMin, delta, d, total);
+            if (fresh.Length == 0) sb.Append(", новых нет.");
+            else
+            {
+                sb.Append(", новые: ").Append(string.Join(", ", fresh));
+                if (more > 0) sb.AppendFormat(" и ещё {0}", more);
+                sb.Append('.');
+            }
+            WriteLogFile("info", "Core", sb.ToString());
         }
 
         /// <summary>
@@ -2786,6 +2980,9 @@ namespace Zapret2App
                 p.ErrorDataReceived += (s2, e2) => HandleWinwsOutput(e2.Data, true);
                 p.Exited += WinwsExited;
 
+                coreDebug = (" " + cleanArgs + " ").Contains(" --debug ");
+                coreOutputSinceUtc = DateTime.UtcNow;
+                Interlocked.Exchange(ref coreStartupLines, 0);
                 p.Start();
                 p.BeginOutputReadLine();
                 p.BeginErrorReadLine();
@@ -4804,6 +5001,18 @@ namespace Zapret2App
                     {
                         Task.Run(() => EnableTcpTimestamps());
                     }
+                    else if (rawMsg == "lists_info")
+                    {
+                        Task.Run(() => SendListsInfo("", ""));
+                    }
+                    else if (rawMsg == "lists_check:manual" || rawMsg == "lists_check:auto")
+                    {
+                        CheckListsUpdate(rawMsg.EndsWith("manual"));
+                    }
+                    else if (rawMsg == "lists_reset")
+                    {
+                        ResetListsToBuiltin();
+                    }
                     else if (rawMsg == "autostart_get")
                     {
                         Task.Run(() => SendAutostartState(""));
@@ -4965,6 +5174,368 @@ namespace Zapret2App
             t.IsBackground = true;
             t.Name = "single-instance";
             t.Start();
+        }
+
+        // ================= Обновление списков сайтов ===========================
+        //
+        // Списки вшиты в exe и раньше обновлялись только с новой версией
+        // программы. Теперь программа берёт их из репозитория — из host-list/
+        // ветки main: там же лежит lists.json с номером версии и SHA-256
+        // каждого файла (его пишет scripts/lists_manifest.mjs, сборка
+        // запускает его сама). Опубликовать списки = запушить их в main.
+        //
+        // Скачанное хранится отдельно, в host-list-update\: встроенные списки
+        // распаковываются в host-list\ при каждом запуске и затёрли бы его.
+        // После распаковки обновление кладётся поверх — если оно новее
+        // встроенного. Когда выходит программа со списками ещё свежее,
+        // скачанное удаляется.
+        //
+        // Ядро перечитывает списки само, как только у файла меняются время
+        // изменения или размер (nfq/hostlist.c, LoadHostList), поэтому после
+        // обновления его не перезапускаем. Файлы надо только подменять
+        // целиком, а не переписывать на месте.
+
+        private const string ListsBaseUrl = "https://raw.githubusercontent.com/snax1k/new-zapret2-gui/main/host-list/";
+        private const string ListsManifestName = "lists.json";
+        /// <summary>Только эти файлы обновляются из сети — имя из манифеста иначе в путь не попадает.</summary>
+        private static readonly string[] UpdatableLists = { "list-general.txt", "list-google.txt", "list-exclude.txt" };
+        private const int LIST_MAX_BYTES = 4 * 1024 * 1024;
+        private volatile bool listsBusy = false;
+
+        private string ListsUpdateDir
+        {
+            get { return Path.Combine(Path.GetDirectoryName(listsPath), "host-list-update"); }
+        }
+
+        private class ListsManifest
+        {
+            public int Version;
+            public string Updated = "";
+            public System.Collections.Generic.Dictionary<string, string> Sha =
+                new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        /// <summary>Разбор lists.json. Формат наш (lists_manifest.mjs), регулярных выражений хватает.</summary>
+        private static ListsManifest ParseListsManifest(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            var v = Regex.Match(json, "\"version\"\\s*:\\s*(\\d+)");
+            if (!v.Success) return null;
+            var m = new ListsManifest();
+            m.Version = int.Parse(v.Groups[1].Value);
+            var u = Regex.Match(json, "\"updated\"\\s*:\\s*\"([^\"]*)\"");
+            if (u.Success) m.Updated = u.Groups[1].Value;
+            foreach (Match f in Regex.Matches(json,
+                "\"name\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"sha256\"\\s*:\\s*\"([0-9a-fA-F]{64})\""))
+            {
+                if (Array.IndexOf(UpdatableLists, f.Groups[1].Value) >= 0)
+                    m.Sha[f.Groups[1].Value] = f.Groups[2].Value.ToLowerInvariant();
+            }
+            return m;
+        }
+
+        private static ListsManifest ReadListsManifest(string dir)
+        {
+            try
+            {
+                string p = Path.Combine(dir, ListsManifestName);
+                return File.Exists(p) ? ParseListsManifest(File.ReadAllText(p, Encoding.UTF8)) : null;
+            }
+            catch { return null; }
+        }
+
+        private static string Sha256Hex(byte[] data)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                var sb = new StringBuilder(64);
+                foreach (byte b in sha.ComputeHash(data)) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        /// <summary>Записей в списке: непустые строки, кроме комментариев.</summary>
+        private static int CountHostlistEntries(string text)
+        {
+            int n = 0;
+            foreach (string raw in text.Split('\n'))
+            {
+                string s = raw.Trim();
+                if (s.Length > 0 && s[0] != '#') n++;
+            }
+            return n;
+        }
+
+        /// <summary>
+        /// Похоже ли на список доменов zapret: имена (допустимы ^ в начале и *),
+        /// комментарии с #. Чтобы вместо списка не легла страница с ошибкой.
+        /// </summary>
+        private static bool LooksLikeHostlist(string text)
+        {
+            int n = 0;
+            foreach (string raw in text.Split('\n'))
+            {
+                string s = raw.Trim();
+                if (s.Length == 0 || s[0] == '#') continue;
+                if (s.Length > 260 || !Regex.IsMatch(s, "^\\^?[A-Za-z0-9*._-]+$")) return false;
+                n++;
+            }
+            return n > 0;
+        }
+
+        /// <summary>Подменяет файл целиком: ядро не должно прочитать его наполовину.</summary>
+        private static void ReplaceFileAtomically(string target, byte[] data)
+        {
+            string tmp = target + ".tmp";
+            File.WriteAllBytes(tmp, data);
+            for (int i = 0; ; i++)
+            {
+                try
+                {
+                    if (File.Exists(target)) File.Replace(tmp, target, null, true);
+                    else File.Move(tmp, target);
+                    return;
+                }
+                catch (IOException)
+                {
+                    // Ядро могло как раз читать файл.
+                    if (i >= 5) { try { File.Delete(tmp); } catch { } throw; }
+                    Thread.Sleep(200);
+                }
+            }
+        }
+
+        /// <summary>
+        /// При запуске, после распаковки встроенных списков: скачанные новее —
+        /// кладём поверх; устарели (вышла программа со списками свежее) или
+        /// испорчены — удаляем.
+        /// </summary>
+        private void ApplyListsOverlay()
+        {
+            string dir = ListsUpdateDir;
+            if (!Directory.Exists(dir)) return;
+            try
+            {
+                var upd = ReadListsManifest(dir);
+                var builtin = ReadListsManifest(listsPath);
+                int builtinVer = builtin != null ? builtin.Version : 0;
+                if (upd == null || upd.Version <= builtinVer)
+                {
+                    Directory.Delete(dir, true);
+                    if (upd != null)
+                        WriteLogFile("info", "Lists", string.Format(
+                            "Встроенные списки (версия {0}) не старее скачанных ({1}) — скачанные удалены.", builtinVer, upd.Version));
+                    return;
+                }
+
+                // Сначала проверяем все файлы, потом подменяем: полуприменённое
+                // обновление хуже никакого.
+                var files = new System.Collections.Generic.Dictionary<string, byte[]>();
+                foreach (var kv in upd.Sha)
+                {
+                    byte[] data = File.ReadAllBytes(Path.Combine(dir, kv.Key));
+                    if (Sha256Hex(data) != kv.Value) throw new InvalidDataException(kv.Key + ": контрольная сумма не сходится");
+                    files[kv.Key] = data;
+                }
+                foreach (var kv in files) ReplaceFileAtomically(Path.Combine(listsPath, kv.Key), kv.Value);
+                WriteLogFile("info", "Lists", string.Format(
+                    "Списки сайтов: скачанная версия {0} от {1} (встроенная — {2}).", upd.Version, upd.Updated, builtinVer));
+            }
+            catch (Exception ex)
+            {
+                WriteLogFile("warn", "Lists", "Скачанные списки не применены и удалены: " + ex.Message);
+                try { Directory.Delete(dir, true); } catch { }
+                try { RestoreBuiltinLists(); } catch { }
+            }
+        }
+
+        /// <summary>Встроенные в exe списки — обратно в host-list\, с атомарной подменой.</summary>
+        private void RestoreBuiltinLists()
+        {
+            using (Stream stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("lists.zip"))
+            {
+                if (stream == null) return;
+                using (var archive = new ZipArchive(stream))
+                {
+                    foreach (ZipArchiveEntry entry in archive.Entries)
+                    {
+                        if (Array.IndexOf(UpdatableLists, entry.Name) < 0) continue;
+                        using (var s = entry.Open())
+                        using (var ms = new MemoryStream())
+                        {
+                            s.CopyTo(ms);
+                            ReplaceFileAtomically(Path.Combine(listsPath, entry.Name), ms.ToArray());
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Состояние списков — в интерфейс. result: updated, up_to_date, reset, error или пусто.</summary>
+        private void SendListsInfo(string result, string error)
+        {
+            var builtin = ReadListsManifest(listsPath);
+            var upd = ReadListsManifest(ListsUpdateDir);
+            bool fromUpdate = upd != null && (builtin == null || upd.Version > builtin.Version);
+            var cur = fromUpdate ? upd : builtin;
+            int domains = 0;
+            foreach (string name in new[] { "list-general.txt", "list-google.txt" })
+            {
+                try { domains += CountHostlistEntries(File.ReadAllText(Path.Combine(listsPath, name), Encoding.UTF8)); }
+                catch { }
+            }
+            SendToWeb(string.Format(
+                "{{\"type\":\"lists_info\",\"version\":{0},\"updated\":\"{1}\",\"source\":\"{2}\",\"builtinVersion\":{3},\"domains\":{4},\"result\":\"{5}\",\"error\":\"{6}\"}}",
+                cur != null ? cur.Version : 0, JsonEscape(cur != null ? cur.Updated : ""),
+                fromUpdate ? "update" : "builtin", builtin != null ? builtin.Version : 0,
+                domains, result, JsonEscape(error ?? "")));
+        }
+
+        /// <summary>
+        /// Откуда брать списки. Основной — raw.githubusercontent.com; у
+        /// некоторых провайдеров он недоступен, тогда — тот же репозиторий
+        /// через CDN jsDelivr (кэширует ветку до 12 часов — обновление придёт
+        /// позже, но придёт).
+        /// </summary>
+        private static readonly string[] ListsSources =
+        {
+            ListsBaseUrl,
+            "https://cdn.jsdelivr.net/gh/snax1k/new-zapret2-gui@main/host-list/"
+        };
+
+        /// <summary>
+        /// Описание и, если версия новее current, файлы из одного источника.
+        /// null — новее нет. Исключение — источник недоступен или отдал не то.
+        /// </summary>
+        private static System.Collections.Generic.Dictionary<string, byte[]> FetchRemoteLists(
+            string baseUrl, int current, out ListsManifest remote, out string remoteJson)
+        {
+            // raw.githubusercontent.com держит файлы в кэше несколько минут —
+            // метка в адресе просит свежую копию.
+            string stamp = "?t=" + DateTime.UtcNow.Ticks;
+            using (var wc = new WebClient())
+            {
+                wc.Encoding = Encoding.UTF8;
+                wc.Headers.Add("User-Agent", "Zapret2-GUI/" + AppVersion);
+                remoteJson = wc.DownloadString(baseUrl + ListsManifestName + stamp);
+                remote = ParseListsManifest(remoteJson);
+                if (remote == null || remote.Sha.Count == 0)
+                    throw new InvalidDataException("в репозитории нет описания списков (lists.json)");
+                if (remote.Version <= current) return null;
+
+                var files = new System.Collections.Generic.Dictionary<string, byte[]>();
+                foreach (var kv in remote.Sha)
+                {
+                    byte[] data = wc.DownloadData(baseUrl + kv.Key + stamp);
+                    if (data.Length > LIST_MAX_BYTES)
+                        throw new InvalidDataException(kv.Key + ": слишком большой файл");
+                    if (Sha256Hex(data) != kv.Value)
+                        throw new InvalidDataException(kv.Key + ": контрольная сумма не сходится — возможно, списки меняли во время загрузки, попробуйте позже");
+                    if (!LooksLikeHostlist(Encoding.UTF8.GetString(data)))
+                        throw new InvalidDataException(kv.Key + ": не похож на список доменов");
+                    files[kv.Key] = data;
+                }
+                return files;
+            }
+        }
+
+        /// <summary>Проверить списки в репозитории и, если там новее, применить.</summary>
+        private void CheckListsUpdate(bool manual)
+        {
+            if (listsBusy) return;
+            listsBusy = true;
+            Task.Run(() =>
+            {
+                string result = "up_to_date", error = "";
+                try
+                {
+                    var builtin = ReadListsManifest(listsPath);
+                    var upd = ReadListsManifest(ListsUpdateDir);
+                    int current = Math.Max(builtin != null ? builtin.Version : 0, upd != null ? upd.Version : 0);
+
+                    // Источники по очереди; описание и файлы — всегда из одного,
+                    // иначе контрольные суммы разойдутся.
+                    ListsManifest remote = null;
+                    string remoteJson = null;
+                    System.Collections.Generic.Dictionary<string, byte[]> files = null;
+                    string firstError = null;
+                    foreach (string baseUrl in ListsSources)
+                    {
+                        try
+                        {
+                            files = FetchRemoteLists(baseUrl, current, out remote, out remoteJson);
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            remote = null;
+                            files = null;
+                            if (firstError == null)
+                            {
+                                var we = ex as WebException;
+                                var resp = we != null ? we.Response as HttpWebResponse : null;
+                                firstError = resp != null && resp.StatusCode == HttpStatusCode.NotFound
+                                    ? "в репозитории нет описания списков (lists.json)"
+                                    : we != null ? "нет связи с GitHub (" + ex.Message + ")" : ex.Message;
+                            }
+                        }
+                    }
+                    if (remote == null) throw new InvalidDataException(firstError ?? "источники списков недоступны");
+
+                    if (files == null)
+                    {
+                        if (manual) SendLog("info", string.Format("Списки сайтов актуальны: версия {0}.", current), "Lists");
+                    }
+                    else
+                    {
+                        // Копия для следующих запусков: файлы, затем описание —
+                        // без описания неполная копия не применится.
+                        string dir = ListsUpdateDir;
+                        if (Directory.Exists(dir)) Directory.Delete(dir, true);
+                        Directory.CreateDirectory(dir);
+                        foreach (var kv in files) File.WriteAllBytes(Path.Combine(dir, kv.Key), kv.Value);
+                        File.WriteAllText(Path.Combine(dir, ListsManifestName), remoteJson, new UTF8Encoding(false));
+
+                        foreach (var kv in files) ReplaceFileAtomically(Path.Combine(listsPath, kv.Key), kv.Value);
+                        result = "updated";
+                        SendLog("success", string.Format(
+                            "Списки сайтов обновлены: версия {0} от {1} (была {2}). Ядро подхватит их само, перезапуск не нужен.",
+                            remote.Version, remote.Updated, current), "Lists");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    result = "error";
+                    error = ex.Message;
+                    if (manual) SendLog("error", "Не удалось обновить списки сайтов: " + error, "Lists");
+                    else WriteLogFile("warn", "Lists", "Автопроверка списков: " + error);
+                }
+                finally
+                {
+                    listsBusy = false;
+                }
+                SendListsInfo(result, error);
+            });
+        }
+
+        private void ResetListsToBuiltin()
+        {
+            Task.Run(() =>
+            {
+                string error = "";
+                try
+                {
+                    if (Directory.Exists(ListsUpdateDir)) Directory.Delete(ListsUpdateDir, true);
+                    RestoreBuiltinLists();
+                    SendLog("info", "Списки сайтов возвращены к встроенным в программу.", "Lists");
+                }
+                catch (Exception ex)
+                {
+                    error = ex.Message;
+                    SendLog("error", "Не удалось вернуть встроенные списки: " + error, "Lists");
+                }
+                SendListsInfo(error.Length == 0 ? "reset" : "error", error);
+            });
         }
 
         // ================= Автозапуск при входе в Windows ======================

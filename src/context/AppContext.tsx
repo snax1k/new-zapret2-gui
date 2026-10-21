@@ -23,7 +23,8 @@ import {
   TgProxyState,
   TgProxySettings,
   AutostartState,
-  CoreRestartInfo
+  CoreRestartInfo,
+  ListsInfo
 } from '../types';
 import {
   buildPresetArgs,
@@ -49,7 +50,7 @@ import {
 export const BUNDLED_CORE_VERSION = 'v72.13';
 
 /** Версия приложения. Должна совпадать с AppVersion в NativeApp.cs. */
-export const APP_VERSION = '0.5.0';
+export const APP_VERSION = '0.5.1-test';
 
 const THEME_ACCENT_KEY = 'zapret2_theme_accent_v1';
 const THEME_BG_KEY = 'zapret2_theme_bg_v1';
@@ -67,6 +68,12 @@ const TG_SETTINGS_KEY = 'zapret2_tgproxy_v1';
  * Пока ключа нет, мастер открывается при каждом запуске.
  */
 const WIZARD_KEY = 'zapret2_wizard_v1';
+/** Обновлять списки сайтов из репозитория автоматически: 'on' или 'off'. */
+const LISTS_AUTO_KEY = 'zapret2_lists_auto_v1';
+/** Когда в последний раз проверяли списки в репозитории. ISO-строка. */
+const LISTS_CHECKED_KEY = 'zapret2_lists_checked_v1';
+/** Списки меняются редко — проверять чаще раза в 6 часов незачем. */
+const LISTS_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Включать обход сразу при запуске программы: '1' или '0'. */
 const AUTO_ENABLE_KEY = 'zapret2_auto_enable_v1';
 /**
@@ -355,6 +362,14 @@ interface AppContextType {
   setAutoEnableOnLaunch: (on: boolean) => void;
   /** Ядро упало и ждёт перезапуска — номер попытки и пауза. */
   restartInfo: CoreRestartInfo | null;
+  /** Встроенные списки сайтов: версия, откуда, идёт ли проверка. */
+  listsInfo: ListsInfo;
+  /** Когда списки в последний раз проверялись в репозитории (ISO). */
+  listsCheckedAt: string;
+  checkListsUpdate: () => void;
+  resetListsToBuiltin: () => void;
+  listsAutoUpdate: boolean;
+  setListsAutoUpdate: (on: boolean) => void;
   showTrayToast: boolean;
   setShowTrayToast: (show: boolean) => void;
   activePresetId: string;
@@ -533,6 +548,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setAutoEnableOnLaunchState(on);
   };
   const [restartInfo, setRestartInfo] = useState<CoreRestartInfo | null>(null);
+
+  // ---- Списки сайтов из репозитория -------------------------------------
+  //
+  // Проверку и загрузку делает нативная часть (SHA-256, атомарная подмена
+  // файлов); здесь — расписание и отображение. Ядро перечитывает списки
+  // само, перезапускать его не нужно.
+  const [listsInfo, setListsInfo] = useState<ListsInfo>({
+    known: false, version: 0, updated: '', source: 'builtin', builtinVersion: 0,
+    domains: 0, checking: false, lastResult: '', error: ''
+  });
+  const [listsCheckedAt, setListsCheckedAt] = useState<string>(() => loadSetting(LISTS_CHECKED_KEY) || '');
+  const [listsAutoUpdate, setListsAutoUpdateState] = useState<boolean>(() => loadSetting(LISTS_AUTO_KEY) !== 'off');
+  const setListsAutoUpdate = (on: boolean) => {
+    saveSetting(LISTS_AUTO_KEY, on ? 'on' : 'off');
+    setListsAutoUpdateState(on);
+  };
   // ---- Мастер первого запуска --------------------------------------
   //
   // Открывается сам, пока его не прошли и не пропустили. Решение хранится
@@ -757,6 +788,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
                   : data.status === 'error' ? 'Ошибка запуска'
                   : 'Остановлен'
             }));
+          } else if (data.type === 'lists_info') {
+            const result: string = data.result || '';
+            setListsInfo({
+              known: true,
+              version: data.version || 0,
+              updated: data.updated || '',
+              source: data.source === 'update' ? 'update' : 'builtin',
+              builtinVersion: data.builtinVersion || 0,
+              domains: data.domains || 0,
+              checking: false,
+              lastResult: result,
+              error: data.error || ''
+            });
+            if (result === 'updated' || result === 'up_to_date') {
+              const now = new Date().toISOString();
+              saveSetting(LISTS_CHECKED_KEY, now);
+              setListsCheckedAt(now);
+            }
           } else if (data.type === 'autostart') {
             setAutostart({
               known: true,
@@ -1313,6 +1362,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return () => clearTimeout(t);
     // Намеренно только при монтировании: это стартовое действие, а не
     // реакция на правку настроек — их применяет setTgSettings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ---- Списки сайтов: действия ------------------------------------------
+
+  const postListsCheck = (manual: boolean) => {
+    if (!window.chrome?.webview) return;
+    setListsInfo(prev => ({ ...prev, checking: true, error: '', lastResult: '' }));
+    window.chrome.webview.postMessage(manual ? 'lists_check:manual' : 'lists_check:auto');
+  };
+
+  const checkListsUpdate = () => {
+    addLog('info', 'Проверяю списки сайтов в репозитории…', 'Lists');
+    postListsCheck(true);
+  };
+
+  const resetListsToBuiltin = () => {
+    if (!window.chrome?.webview) return;
+    setListsInfo(prev => ({ ...prev, checking: true, error: '', lastResult: '' }));
+    window.chrome.webview.postMessage('lists_reset');
+  };
+
+  // Состояние — сразу при запуске; автопроверка — через 15 с после него и
+  // дальше раз в полчаса смотрим, не прошло ли 6 часов: программа с
+  // автозапуском работает сутками, проверки только при старте мало.
+  useEffect(() => {
+    if (!window.chrome?.webview) return;
+    const first = setTimeout(() => window.chrome!.webview!.postMessage('lists_info'), 700);
+    const due = () => {
+      if (loadSetting(LISTS_AUTO_KEY) === 'off') return;
+      const last = Date.parse(loadSetting(LISTS_CHECKED_KEY) || '');
+      if (!isNaN(last) && Date.now() - last < LISTS_CHECK_INTERVAL_MS) return;
+      postListsCheck(false);
+    };
+    const auto = setTimeout(due, 15000);
+    const timer = setInterval(due, 30 * 60 * 1000);
+    return () => { clearTimeout(first); clearTimeout(auto); clearInterval(timer); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2060,6 +2146,12 @@ const parseReleaseHighlights = (body: string): string[] => {
         autoEnableOnLaunch,
         setAutoEnableOnLaunch,
         restartInfo,
+        listsInfo,
+        listsCheckedAt,
+        checkListsUpdate,
+        resetListsToBuiltin,
+        listsAutoUpdate,
+        setListsAutoUpdate,
         showTrayToast,
         setShowTrayToast,
         activePresetId,

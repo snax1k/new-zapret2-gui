@@ -120,6 +120,26 @@ export interface CoreRestartInfo {
   delaySec: number;
 }
 
+/** Встроенные списки сайтов и их обновление из репозитория. */
+export interface ListsInfo {
+  /** Ответ нативной части уже пришёл. */
+  known: boolean;
+  /** Версия списков, которые сейчас действуют. */
+  version: number;
+  /** Дата этой версии, ГГГГ-ММ-ДД. */
+  updated: string;
+  /** builtin — встроены в программу, update — скачаны из репозитория. */
+  source: 'builtin' | 'update';
+  builtinVersion: number;
+  /** Записей в списках обхода (list-general и list-google). */
+  domains: number;
+  /** Идёт проверка или загрузка. */
+  checking: boolean;
+  /** Итог последнего действия: updated, up_to_date, reset, error или пусто. */
+  lastResult: string;
+  error: string;
+}
+
 /** Автозапуск при входе в Windows — состояние задачи в Планировщике. */
 export interface AutostartState {
   /** Ответ нативной части уже пришёл. До него переключатель неактивен. */
