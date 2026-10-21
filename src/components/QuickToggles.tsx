@@ -15,7 +15,7 @@ export const QuickToggles: React.FC<{ compact?: boolean }> = ({ compact = false 
     { key: 'quicDesync', label: 'Ускорение QUIC', hint: 'HTTP/3', title: 'Профиль QUIC — UDP 443 для доменов из списков' },
     { key: 'allTrafficMode', label: 'Весь трафик', hint: 'игнорировать списки', expert: true, title: 'Снимает списки доменов: обход применяется ко всему трафику на портах. Ломает подбор стратегии для сайтов.' },
     { key: 'autoTtl', label: 'Авто-TTL', hint: 'TTL у фейков', expert: true, title: '--dpi-desync-autottl=2:3-12 для профилей с fake' },
-    { key: 'verboseLog', label: 'Подробный журнал', hint: 'для счётчиков', title: 'Пакетный журнал ядра (--debug). Без него не считаются «Обработано» и «Сайтов распознано». Пишется в отдельный файл winws-trace.log — примерно последний час, общий журнал не засоряет.' },
+    { key: 'verboseLog', label: 'Подробный журнал', hint: 'для счётчиков', title: 'Пакетный журнал ядра (--debug). Без него не считаются «Обработано» и «Сайтов распознано». Пишется в отдельный файл winws-trace.log — последние часы работы, общий журнал не засоряет.' },
   ];
 
   return (
